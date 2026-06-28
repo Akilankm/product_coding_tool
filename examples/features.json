@@ -1,0 +1,29 @@
+{
+  "features": [
+    {
+      "feature_id": "11707",
+      "feature_name": "BRAND",
+      "feature_type": "open_set",
+      "definition": "Brand under which the toy is sold.",
+      "aliases": ["brand name", "product brand"],
+      "evidence_hints": ["brand", "manufacturer", "title", "metadata"]
+    },
+    {
+      "feature_id": "227098",
+      "feature_name": "TOY MANUFACTURER",
+      "feature_type": "open_set",
+      "definition": "Manufacturer or producer of the toy product.",
+      "aliases": ["manufacturer", "producer", "made by"],
+      "evidence_hints": ["manufacturer", "producer", "vendor", "brand"]
+    },
+    {
+      "feature_id": "BATTERY_REQUIRED",
+      "feature_name": "Battery Required",
+      "feature_type": "closed_set",
+      "definition": "Whether the toy requires batteries to operate.",
+      "allowed_values": ["Yes", "No", "Not stated"],
+      "aliases": ["battery", "batteries required", "requires batteries"],
+      "evidence_hints": ["battery", "batteries", "AA", "AAA", "included", "requires"]
+    }
+  ]
+}

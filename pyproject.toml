@@ -1,0 +1,38 @@
+[project]
+name = "product-coding-tool"
+version = "1.2.1"
+description = "Artifact-grounded, loop-engineered product feature coding agent. No web search or scraping runtime."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "openai>=1.54",
+    "httpx>=0.28.1",
+    "loguru>=0.7",
+    "pydantic>=2.10",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "ipykernel>=7.2.0",
+    "notebook>=7.0",
+]
+test = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+package-dir = "src"
+includes = ["src/product_coding_tool"]
+
+[tool.pdm.scripts]
+code-product = "python scripts/run_product_coding.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
