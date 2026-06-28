@@ -1,0 +1,8 @@
+# Deterministic notebook kernel constraints.
+ipykernel==6.29.5
+jedi==0.19.1
+parso==0.8.4
+ipython>=8.18,<9.0
+jupyter-client>=8.6,<9.0
+jupyter-core>=5.7,<6.0
+traitlets>=5.14,<6.0

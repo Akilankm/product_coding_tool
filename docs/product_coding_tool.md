@@ -1,140 +1,73 @@
-# Product Coding Tool
+# Product Coding Tool Architecture
 
-This package is a standalone artifact-grounded, loop-engineered product coding agent. It consumes an already-created scrape artifact and requested feature rules. It does not discover URLs, call the web, or run scraping.
+## Boundary
 
-## Purpose
+This component starts **after scraping is complete**.
 
-Input:
-
-```text
-scrape artifact folder + requested feature rules
-```
-
-Output:
+It accepts:
 
 ```text
-coded_features.json
-coded_features.csv
-coding_audit.md
-agent_trace.json
+1. scrape artifact folder
+2. features/rules to code
 ```
 
-The LLM sits at the center as the planning and coding brain, but it does not directly read the filesystem. Python artifact tools perform deterministic navigation, reading, local artifact evidence lookup, evidence-packet construction, validation, and output writing.
-
-## Expected artifact shape
-
-The agent supports the completed artifact root folder:
+It does not perform:
 
 ```text
-data/scraped/scrape_.../
-├── request.json
-├── scrape_result.json
-└── retailer/
-    ├── product_evidence.json
-    ├── product_evidence.md
-    ├── claims.md
-    ├── source.md
-    ├── vision.md
-    ├── metadata.json
-    ├── quality_report.json
-    ├── noise_report.json
-    ├── evidence_recovery_report.json
-    ├── tables/*.md
-    ├── images/*
-    └── manifests/*.json
+- web search
+- URL discovery
+- retailer resolution
+- crawling
+- scraping
 ```
 
-You may also pass the `retailer/` subfolder directly.
-
-## Agent loop
-
-For every requested feature:
+## Agentic loop
 
 ```text
-FeatureRule
-  → ArtifactInventory
-  → LLM evidence planner
-  → ArtifactRetriever reads and locates evidence in artifact files
-  → EvidencePacket
-  → LLM feature coder
-  → RuleValidator + ReviewGate
-  → optional follow-up retrieval loop
-  → final FeatureCodingResult
+requested feature
+  -> artifact inventory
+  -> LLM evidence planner
+  -> local artifact evidence collection
+  -> evidence packet
+  -> LLM feature coder
+  -> deterministic rule validator
+  -> review gate
+  -> optional follow-up evidence collection
+  -> final coded result
 ```
 
-## Source priority
+## Artifact communication tools
 
-The retriever intentionally favors direct retailer evidence:
+| Module | Purpose |
+|---|---|
+| `ArtifactNavigator` | Normalizes root/retailer folder and lists artifact files. |
+| `ArtifactReader` | Reads JSON, markdown, tables, quality files and product context. |
+| `ArtifactEvidenceLocator` | Searches local artifact text only. No internet. |
+| `EvidencePacketBuilder` | Builds compact feature-specific evidence packets. |
+| `ImageLoader` | Loads product images only when visual evidence is required. |
 
-1. `retailer/source.md`
-2. `retailer/tables/*.md`
-3. `retailer/metadata.json`
-4. `retailer/product_evidence.json` / `.md`
-5. `retailer/claims.md`
-6. `retailer/vision.md`
-7. image manifest/images
-8. quality/noise/recovery reports
+## LLM usage
 
-## LLM reuse
+The LLM is used only as the reasoning brain:
 
-The package includes a standalone `product_coding_tool.services.llm` module based on the same enterprise LLM contract you already use. It supports `PCT_LLM_*` variables and also falls back to existing `PCA_LLM_*` variables, so the same notebook/AzureML LLM configuration can be reused without bringing any scraper code into this package.
+1. plan evidence collection
+2. code feature value from collected evidence
+3. optionally inspect images for visual features
 
-## Quick run
+All file access is deterministic Python tooling.
 
-```bash
-python scripts/run_product_coding.py \
-  --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
-  --features-json examples/features.json \
-  --output-dir data/coded/demo
+## Notebook stability
+
+`pyproject.toml` includes `ipykernel` and stable notebook kernel dependencies. The project kernel registration disables Jedi completion through project-local IPython config:
+
+```python
+c.Completer.use_jedi = False
 ```
 
-## Inline feature test
+The notebook also runs:
 
-```bash
-python scripts/run_product_coding.py \
-  --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
-  --feature BRAND \
-  --feature "Battery Required"
+```python
+%config Completer.use_jedi = False
 ```
 
-## Feature JSON contract
-
-```json
-{
-  "features": [
-    {
-      "feature_id": "BATTERY_REQUIRED",
-      "feature_name": "Battery Required",
-      "feature_type": "closed_set",
-      "definition": "Whether the toy requires batteries to operate.",
-      "allowed_values": ["Yes", "No", "Not stated"],
-      "aliases": ["battery", "batteries required"],
-      "evidence_hints": ["battery", "AA", "AAA", "requires"]
-    }
-  ]
-}
-```
-
-## Manual-review gate
-
-Manual review is forced when:
-
-- no evidence is found;
-- no evidence is attached to the final value;
-- closed-set value is outside `allowed_values`;
-- confidence is below `PCT/PCA_CODING_MIN_CONFIDENCE`;
-- conflicts are detected;
-- the LLM call fails and deterministic fallback is used.
-
-## Notebook
-
-Use:
-
-```text
-notebooks/run_product_coding_agent.ipynb
-```
-
-
-## Explicit non-goals
-
-This package does not include URL finding, web search, SerpAPI calls, Crawl4AI execution, page scraping, browser automation, or retailer-domain resolution. Those are upstream responsibilities.
+This keeps autocomplete from blocking the kernel in heavy AzureML/VS Code environments.

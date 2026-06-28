@@ -17,8 +17,10 @@ class ReviewGate:
         result: FeatureCodingResult,
         *,
         iteration: int,
+        max_iterations: int | None = None,
     ) -> bool:
-        if iteration >= self.cfg.coding_max_iterations:
+        limit = max(1, max_iterations or self.cfg.coding_max_iterations)
+        if iteration >= limit:
             return False
         if not result.manual_review:
             return False

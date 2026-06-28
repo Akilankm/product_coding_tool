@@ -14,7 +14,7 @@ def parse_json_object(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
     if not raw:
         return {}
-    match = _JSON_FENCE_RE.locate(raw)
+    match = _JSON_FENCE_RE.search(raw)
     if match:
         raw = match.group(1).strip()
     try:

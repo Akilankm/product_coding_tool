@@ -13,7 +13,7 @@ from .models import (
     FeatureRule,
 )
 
-__version__ = "0.1.0"
+__version__ = "1.2.2"
 
 __all__ = [
     "BatchCodingResult",

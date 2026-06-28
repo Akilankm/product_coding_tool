@@ -14,6 +14,23 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_dotenv_files() -> None:
+    """Load local .env files when python-dotenv is installed.
+
+    AzureML/runtime environment variables still win because python-dotenv does not
+    override existing variables by default.
+    """
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+    load_dotenv(_ROOT / ".env", override=False)
+    load_dotenv(override=False)
+
+
+_load_dotenv_files()
+
+
 def _env(name: str, default: str) -> str:
     pct = os.getenv("PCT_" + name)
     if pct is not None and pct.strip():

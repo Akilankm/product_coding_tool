@@ -1,0 +1,2 @@
+# Base runtime dependencies for environments that do not use PDM directly.
+-e .

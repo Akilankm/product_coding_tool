@@ -46,7 +46,7 @@ class ProductCodingAgent:
                 packet = retriever.retrieve(feature, inventory, plan)
                 result = self.coder.code(feature, packet, iteration=iteration)
                 result.audit["iterations"] = iteration
-                if not self.review_gate.should_collect_more(feature, packet, result, iteration=iteration):
+                if not self.review_gate.should_collect_more(feature, packet, result, iteration=iteration, max_iterations=request.max_iterations):
                     final_result = result
                     break
                 iteration += 1
