@@ -85,6 +85,7 @@ class CodingRequest(BaseModel):
     output_dir: Path | None = None
     product_id: str = ""
     max_iterations: int = 3
+    max_parallel_features: int | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "CodingRequest":
@@ -92,6 +93,8 @@ class CodingRequest(BaseModel):
             raise ValueError(f"artifact_dir does not exist: {self.artifact_dir}")
         if not self.features:
             raise ValueError("At least one feature is required")
+        if self.max_parallel_features is not None and self.max_parallel_features < 1:
+            raise ValueError("max_parallel_features must be >= 1 when provided")
         return self
 
 

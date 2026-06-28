@@ -19,6 +19,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--feature", action="append", help="Inline open-set feature name for quick testing. Can repeat.")
     parser.add_argument("--output-dir", help="Output directory. Defaults to PCT/PCA_CODING_OUTPUT_ROOT/<artifact_id>.")
     parser.add_argument("--max-iterations", type=int, default=3, help="Maximum evidence/coding loop iterations per feature.")
+    parser.add_argument(
+        "--max-parallel-features",
+        type=int,
+        default=None,
+        help="Maximum features to code concurrently. Defaults to PCT/PCA_CODING_MAX_PARALLEL_FEATURES.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
 
@@ -44,6 +50,7 @@ def main(argv: list[str] | None = None) -> None:
         features=load_features(args),
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_iterations=max(1, args.max_iterations),
+        max_parallel_features=args.max_parallel_features,
     )
     result = ProductCodingAgent().run(request)
     print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))

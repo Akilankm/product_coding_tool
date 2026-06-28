@@ -68,6 +68,7 @@ class Config:
     coding_evidence_context_chars: int = field(default_factory=lambda: _env_int("CODING_EVIDENCE_CONTEXT_CHARS", 1_600))
     coding_read_file_chars: int = field(default_factory=lambda: _env_int("CODING_READ_FILE_CHARS", 12_000))
     coding_min_confidence: float = field(default_factory=lambda: _env_float("CODING_MIN_CONFIDENCE", 0.72))
+    coding_max_parallel_features: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_FEATURES", 4))
 
     # LLM switches.
     llm_enabled: bool = field(default_factory=lambda: _env_bool("LLM_ENABLED", True))

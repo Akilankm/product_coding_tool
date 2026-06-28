@@ -13,16 +13,28 @@ It intentionally contains **no URL discovery**, **no web search**, **no SerpAPI*
 ## Runtime loop
 
 ```text
-FeatureRule
-  -> artifact inventory
-  -> LLM evidence plan
-  -> local artifact evidence reader/locator
-  -> evidence packet
-  -> LLM feature coder
-  -> rule validator + review gate
-  -> optional follow-up evidence loop
-  -> final coded output
+FeatureRule list
+  -> artifact inventory once
+  -> feature-level parallel workers
+  -> each worker runs: LLM evidence plan -> local artifact evidence reader/locator -> evidence packet -> LLM feature coder -> rule validator + review gate -> optional follow-up evidence loop
+  -> ordered final coded output
 ```
+
+Feature-level parallelism is enabled by default. Each feature is independent over the same immutable scrape artifact, so the agent can code multiple features concurrently while preserving the input order in `coded_features.json` and `coded_features.csv`.
+
+Control concurrency with:
+
+```bash
+PCT_CODING_MAX_PARALLEL_FEATURES=4
+```
+
+or at runtime:
+
+```bash
+product-code ... --max-parallel-features 4
+```
+
+Use `--max-parallel-features 1` for fully sequential debugging.
 
 ## Inputs
 
@@ -104,7 +116,8 @@ python scripts/install_ipykernel.py
 python scripts/run_product_coding.py \
   --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
   --features-json examples/features.json \
-  --output-dir data/coded/demo
+  --output-dir data/coded/demo \
+  --max-parallel-features 4
 ```
 
 Or, after install:
@@ -113,7 +126,8 @@ Or, after install:
 product-code \
   --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
   --features-json examples/features.json \
-  --output-dir data/coded/demo
+  --output-dir data/coded/demo \
+  --max-parallel-features 4
 ```
 
 ## LLM config
@@ -202,3 +216,26 @@ The code path now defaults to direct HTTP and does not import `openai` unless yo
 - Runtime, LLM HTTP transport, pandas, and Jupyter kernel dependencies live in `[project.dependencies]`, so `pdm install --prod` is enough for notebook execution.
 - Test/lint tooling lives in optional groups and is installed only when requested.
 - No `requirements.txt`, `requirements-notebook.txt`, or constraints files are maintained to avoid dependency drift.
+
+
+## Feature worker pool semantics
+
+The parallel engine uses a dynamic worker pool, not a fixed static assignment.
+With `--max-parallel-features 4` and 8 requested features:
+
+```text
+queue: F1 F2 F3 F4 F5 F6 F7 F8
+
+worker_1 -> F1 -> next available feature
+worker_2 -> F2 -> next available feature
+worker_3 -> F3 -> next available feature
+worker_4 -> F4 -> next available feature
+```
+
+Each worker completes the full loop for one feature before taking another feature:
+
+```text
+plan evidence -> collect artifact evidence -> code value -> review gate -> retry if needed -> final result
+```
+
+So retries happen inside the assigned feature worker. Other workers continue processing their own features. Final JSON/CSV output is sorted back to the original feature input order.

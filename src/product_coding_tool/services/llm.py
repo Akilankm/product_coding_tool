@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import time
+from threading import Lock
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,7 @@ class LLMService:
     _cumulative_prompt: int = 0
     _cumulative_completion: int = 0
     _cumulative_calls: int = 0
+    _usage_lock: Lock = Lock()
 
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or LLMConfig.from_global()
@@ -354,9 +356,10 @@ class LLMService:
 
     @classmethod
     def _record_usage(cls, usage: dict[str, int], purpose: str) -> None:
-        cls._cumulative_prompt += usage.get("prompt_tokens", 0)
-        cls._cumulative_completion += usage.get("completion_tokens", 0)
-        cls._cumulative_calls += 1
+        with cls._usage_lock:
+            cls._cumulative_prompt += usage.get("prompt_tokens", 0)
+            cls._cumulative_completion += usage.get("completion_tokens", 0)
+            cls._cumulative_calls += 1
         logger.info(
             "LLM [{}] prompt={} completion={} total={}",
             purpose,
@@ -421,10 +424,14 @@ class LLMService:
 
     @classmethod
     def token_summary(cls) -> str:
-        total = cls._cumulative_prompt + cls._cumulative_completion
+        with cls._usage_lock:
+            calls = cls._cumulative_calls
+            prompt = cls._cumulative_prompt
+            completion = cls._cumulative_completion
+        total = prompt + completion
         return (
-            f"LLM totals: {cls._cumulative_calls} calls | "
-            f"prompt={cls._cumulative_prompt:,} completion={cls._cumulative_completion:,} "
+            f"LLM totals: {calls} calls | "
+            f"prompt={prompt:,} completion={completion:,} "
             f"total={total:,} tokens"
         )
 
