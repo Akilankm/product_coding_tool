@@ -59,10 +59,15 @@ scrape_.../
 
 ## PDM setup
 
+This repo uses `pyproject.toml` as the single dependency source of truth. There are no `requirements.txt` files.
+
+For the notebook-first AzureML/VS Code workflow, run:
+
 ```bash
-pdm install
-pdm run install-kernel
+pdm install --prod
 ```
+
+That installs runtime + notebook/kernel dependencies from `[project.dependencies]` and then runs the PDM `post_install` hook to register the Jupyter kernel automatically.
 
 Use the installed kernel in VS Code / AzureML notebooks:
 
@@ -85,6 +90,8 @@ c.Completer.use_jedi = False
 This avoids the slow/hanging Jedi autocomplete path in heavy AzureML/Jupyter environments.
 
 ## Non-PDM setup
+
+PDM is the supported path for this project. If you must use pip, install directly from `pyproject.toml` and then register the kernel manually:
 
 ```bash
 python -m pip install -e .
@@ -126,12 +133,72 @@ PCT_LLM_CONSUMER_ID=
 
 ## Test
 
+Test/dev dependencies are intentionally not installed by `pdm install --prod`. For tests, run:
+
 ```bash
+pdm install -G test
 pdm run test
 ```
 
-or:
+or, if pytest is already available:
 
 ```bash
 python -m pytest -q
 ```
+
+
+## v123 notebook LLM fix
+
+The notebook now uses direct `httpx` chat-completions transport by default:
+
+```bash
+PCT_LLM_TRANSPORT=httpx
+```
+
+This avoids the AzureML/VS Code notebook failure:
+
+```text
+ModuleNotFoundError: No module named 'openai.pagination'
+```
+
+That error is caused by a broken or mixed OpenAI SDK install in the active kernel. The product coding agent does not need the SDK for normal runs. It posts directly to the Azure OpenAI / compatible chat-completions endpoint derived from `PCT_LLM_ENDPOINT`, `PCT_LLM_DEPLOYMENT`, and `PCT_LLM_API_VERSION`.
+
+If your gateway already gives a full chat endpoint, set:
+
+```bash
+PCT_LLM_CHAT_COMPLETIONS_URL=<full chat completions url>
+```
+
+Only use the SDK path if you intentionally install the optional extra:
+
+```bash
+pdm add openai==1.55.3
+# or install .[openai-sdk]
+PCT_LLM_TRANSPORT=openai
+```
+
+
+## Clean reinstall after `openai.pagination` error
+
+If you already created the old v122 environment, recreate it once so the notebook does not keep using the broken package state:
+
+```bash
+rm -rf .venv
+pdm install --prod
+```
+
+Then select the kernel named:
+
+```text
+Product Coding Tool (PDM)
+```
+
+The code path now defaults to direct HTTP and does not import `openai` unless you explicitly set `PCT_LLM_TRANSPORT=openai`.
+
+
+## Dependency policy
+
+- `pyproject.toml` is the only dependency manifest.
+- Runtime, LLM HTTP transport, pandas, and Jupyter kernel dependencies live in `[project.dependencies]`, so `pdm install --prod` is enough for notebook execution.
+- Test/lint tooling lives in optional groups and is installed only when requested.
+- No `requirements.txt`, `requirements-notebook.txt`, or constraints files are maintained to avoid dependency drift.

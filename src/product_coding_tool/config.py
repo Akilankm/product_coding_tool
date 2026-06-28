@@ -75,6 +75,11 @@ class Config:
     llm_vision_max_images: int = field(default_factory=lambda: _env_int("LLM_VISION_MAX_IMAGES", 8))
     llm_vision_detail: str = field(default_factory=lambda: _env("LLM_VISION_DETAIL", "low"))
 
+    # LLM transport. Default is direct HTTP to avoid brittle notebook/OpenAI-SDK import issues.
+    # Set PCT_LLM_TRANSPORT=openai if you explicitly want the optional SDK path.
+    llm_transport: str = field(default_factory=lambda: _env("LLM_TRANSPORT", "httpx"))
+    llm_chat_completions_url: str = field(default_factory=lambda: _env("LLM_CHAT_COMPLETIONS_URL", ""))
+
     # Azure OpenAI / compatible gateway. Fallback to PCA_* is intentional.
     llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", ""))
     llm_api_version: str = field(default_factory=lambda: _env("LLM_API_VERSION", "2024-10-21"))

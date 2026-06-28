@@ -1,2 +1,0 @@
-# Notebook UI extras. Core ipykernel is already in pyproject base dependencies.
--e .[notebook-ui]

@@ -15,6 +15,18 @@ def test_pyproject_has_notebook_kernel_and_jedi_guardrails():
     assert "parso==0.8.4" in deps
     assert "pandas" in deps
     assert "product-coding-install-kernel" in data["project"]["scripts"]
+    assert data["tool"]["pdm"]["scripts"]["post_install"] == "python scripts/install_ipykernel.py"
+    assert not any(dep.startswith("openai>=") for dep in data["project"]["dependencies"])
+
+
+def test_pyproject_is_single_dependency_manifest():
+    root = Path(__file__).resolve().parents[1]
+    forbidden = [
+        "requirements.txt",
+        "requirements-notebook.txt",
+        "constraints-notebook.txt",
+    ]
+    assert not any((root / name).exists() for name in forbidden)
 
 
 def test_parse_json_object_recovers_json_fence():

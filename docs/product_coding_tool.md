@@ -71,3 +71,10 @@ The notebook also runs:
 ```
 
 This keeps autocomplete from blocking the kernel in heavy AzureML/VS Code environments.
+
+
+## Dependency installation policy
+
+Use `pdm install --prod` for the notebook/runtime environment. The production dependency set includes `ipykernel`, IPython/Jupyter kernel runtime packages, pandas, HTTP LLM transport, logging, config, and validation dependencies. PDM then runs the `post_install` hook to register the `Product Coding Tool (PDM)` kernel.
+
+The repo intentionally does not contain `requirements.txt` or notebook-specific requirements files. `pyproject.toml` is the single source of truth.
