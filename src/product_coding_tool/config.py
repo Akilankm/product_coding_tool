@@ -62,13 +62,16 @@ class Config:
     output_root: Path = field(default_factory=lambda: Path(_env("CODING_OUTPUT_ROOT", str(_ROOT / "data" / "coded"))))
 
     # Agent loop controls.
-    coding_max_iterations: int = field(default_factory=lambda: _env_int("CODING_MAX_ITERATIONS", 2))
+    coding_max_iterations: int = field(default_factory=lambda: _env_int("CODING_MAX_ITERATIONS", 1))
     coding_max_evidence_items: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_ITEMS", 12))
     coding_max_evidence_chars: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_CHARS", 18_000))
     coding_evidence_context_chars: int = field(default_factory=lambda: _env_int("CODING_EVIDENCE_CONTEXT_CHARS", 900))
     coding_read_file_chars: int = field(default_factory=lambda: _env_int("CODING_READ_FILE_CHARS", 6_000))
     coding_min_confidence: float = field(default_factory=lambda: _env_float("CODING_MIN_CONFIDENCE", 0.72))
     coding_max_parallel_features: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_FEATURES", 4))
+    # Latency control: deterministic planning removes one LLM planner call per feature by default.
+    # Set PCT_CODING_PLANNER_MODE=llm to restore LLM-based evidence planning.
+    coding_planner_mode: str = field(default_factory=lambda: _env("CODING_PLANNER_MODE", "deterministic").strip().lower())
 
     # LLM switches.
     llm_enabled: bool = field(default_factory=lambda: _env_bool("LLM_ENABLED", True))
