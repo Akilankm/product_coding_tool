@@ -39,6 +39,21 @@ class P:
         ),
     )
 
+    PRODUCT_BULK_CODING = PromptSpec(
+        name="product_bulk_feature_coding_json",
+        system=(
+            "You are a strict artifact-grounded product coding engine. Code every requested feature "
+            "for exactly one product using only the supplied product_evidence, product_context, and "
+            "feature rules. Do not use outside knowledge. Do not infer a value unless the product evidence "
+            "supports it. For closed-set features, the coded_value must exactly match one supplied allowed_values "
+            "entry when allowed_values is non-empty; otherwise leave coded_value empty and set manual_review=true. "
+            "Prefer direct source/table/metadata evidence over synthesized claims, and use vision evidence only for "
+            "visual features. Return strict JSON only with top-level key features. features must contain exactly one "
+            "object per input feature with keys: feature_id, coded_value, confidence, manual_review, validation_status, "
+            "identity_status, evidence_used, justification, conflicts, missing_evidence."
+        ),
+    )
+
     VISUAL_FEATURE_CODING = PromptSpec(
         name="product_visual_feature_coding",
         system=(

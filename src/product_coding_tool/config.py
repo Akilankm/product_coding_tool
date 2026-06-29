@@ -70,9 +70,17 @@ class Config:
     coding_context_index_file_chars: int = field(default_factory=lambda: _env_int("CODING_CONTEXT_INDEX_FILE_CHARS", 12_000))
     coding_min_confidence: float = field(default_factory=lambda: _env_float("CODING_MIN_CONFIDENCE", 0.72))
     coding_max_parallel_features: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_FEATURES", 3))
-    coding_max_parallel_products: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_PRODUCTS", 2))
-    coding_global_llm_concurrency: int = field(default_factory=lambda: _env_int("CODING_GLOBAL_LLM_CONCURRENCY", 6))
+    coding_max_parallel_products: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_PRODUCTS", 10))
+    coding_global_llm_concurrency: int = field(default_factory=lambda: _env_int("CODING_GLOBAL_LLM_CONCURRENCY", 10))
     coding_preflight_artifacts_enabled: bool = field(default_factory=lambda: _env_bool("CODING_PREFLIGHT_ARTIFACTS_ENABLED", True))
+    # Speed/quality modes:
+    # - per_product: one bulk LLM call codes all features for one product; selective fallback only for weak/invalid results.
+    # - per_feature: existing one-feature-per-call path for deep debugging.
+    # - auto: currently aliases to per_product for production throughput.
+    coding_mode: str = field(default_factory=lambda: _env("CODING_MODE", "per_product").strip().lower())
+    coding_bulk_context_chars: int = field(default_factory=lambda: _env_int("CODING_BULK_CONTEXT_CHARS", 36_000))
+    coding_bulk_max_fallback_features: int = field(default_factory=lambda: _env_int("CODING_BULK_MAX_FALLBACK_FEATURES", 3))
+    coding_bulk_fallback_enabled: bool = field(default_factory=lambda: _env_bool("CODING_BULK_FALLBACK_ENABLED", True))
     # Latency control: deterministic planning removes one LLM planner call per feature by default.
     # Set PCT_CODING_PLANNER_MODE=llm to restore LLM-based evidence planning.
     coding_planner_mode: str = field(default_factory=lambda: _env("CODING_PLANNER_MODE", "deterministic").strip().lower())
