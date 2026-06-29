@@ -2,6 +2,32 @@
 
 Standalone artifact-grounded product feature coding agent.
 
+## Latency and warning handling
+
+The default runtime is optimized for lower per-product latency:
+
+```bash
+# default: fastest / lowest-cost mode
+export PCT_CODING_PLANNER_MODE=deterministic
+export PCT_CODING_MAX_ITERATIONS=1
+
+# optional: restore exploratory LLM planning / one retry for experiments
+export PCT_CODING_PLANNER_MODE=llm
+export PCT_CODING_MAX_ITERATIONS=2
+```
+
+Why this helps:
+
+```text
+Before: planner LLM call + coding LLM call + possible retry per feature
+Now:   deterministic planner + one coding LLM call per feature by default
+```
+
+Malformed `.json` scrape artifacts are handled as non-fatal artifact-quality warnings.
+The reader caches files per product and logs each malformed file only once, while outputting
+`artifact_quality_report.json` and `batch_artifact_quality_report.json` for audit.
+
+
 ## Runtime inputs
 
 The product coding runtime now takes exactly these three inputs:
@@ -224,7 +250,7 @@ Full scrape files are no longer sent wholesale for every feature. Evidence is co
 feature-specific snippets before LLM coding. Default caps are now:
 
 ```bash
-PCT_CODING_MAX_ITERATIONS=2
+PCT_CODING_MAX_ITERATIONS=1
 PCT_CODING_MAX_EVIDENCE_ITEMS=12
 PCT_CODING_MAX_EVIDENCE_CHARS=18000
 PCT_CODING_EVIDENCE_CONTEXT_CHARS=900
@@ -248,8 +274,7 @@ PCT_CODING_MAX_PARALLEL_FEATURES=4
 Evidence/retry defaults are deliberately conservative to reduce repeated large LLM calls:
 
 ```bash
-PCT_CODING_MAX_ITERATIONS=2
+PCT_CODING_MAX_ITERATIONS=1
 PCT_CODING_MAX_EVIDENCE_ITEMS=12
 PCT_CODING_MAX_EVIDENCE_CHARS=18000
 ```
-
