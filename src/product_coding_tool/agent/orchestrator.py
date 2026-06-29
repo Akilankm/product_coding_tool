@@ -8,8 +8,9 @@ import threading
 
 from ..config import get_config
 from ..log import logger
-from ..models import BatchCodingResult, CodingRequest, EvidencePlan, FeatureCodingResult, FeatureRule
+from ..models import BatchCodingResult, CodingRequest, FeatureCodingResult, FeatureRule
 from ..outputs.writer import ResultWriter
+from ..artifacts.context import ProductArtifactContextBuilder
 from ..artifacts.navigator import ArtifactNavigator
 from ..artifacts.reader import ArtifactReader
 from .coder import FeatureCoder
@@ -46,14 +47,17 @@ class ProductCodingAgent:
         navigator = ArtifactNavigator(request.artifact_dir)
         inventory = navigator.inventory()
         reader = ArtifactReader(navigator)
-        retriever = EvidenceRetriever(navigator, reader)
+        product_context_index = ProductArtifactContextBuilder(navigator, reader).build(inventory)
+        retriever = EvidenceRetriever(navigator, reader, context=product_context_index)
 
         max_workers = self._resolve_max_workers(request)
         logger.info(
-            "ProductCodingAgent start artifact={} features={} max_parallel_features={}",
+            "ProductCodingAgent start artifact={} features={} max_parallel_features={} context_files={} context_chars={}",
             inventory.artifact_id,
             len(request.features),
             max_workers,
+            product_context_index.file_count,
+            product_context_index.total_text_chars,
         )
 
         if max_workers <= 1 or len(request.features) <= 1:
@@ -73,7 +77,7 @@ class ProductCodingAgent:
         product_id = request.product_id or str(request.product_context.get("input_id") or inventory.artifact_id)
         self._apply_request_metadata(results, request=request, product_id=product_id)
 
-        artifact_quality_report = reader.quality_report().to_dict()
+        artifact_quality_report = product_context_index.artifact_quality_report or reader.quality_report().to_dict()
         self._attach_artifact_quality(results, artifact_quality_report)
         out = BatchCodingResult(
             artifact_id=inventory.artifact_id,
@@ -104,12 +108,7 @@ class ProductCodingAgent:
         max_iterations: int,
         max_workers: int,
     ) -> list[FeatureCodingResult]:
-        """Run independent feature coding loops through a dynamic worker pool.
-
-        A worker receives one feature, completes that feature's full sequential
-        evidence loop including retries, then picks the next queued feature.
-        Final output is sorted back to the input feature order.
-        """
+        """Run independent feature coding loops through a dynamic worker pool."""
         pool = FeatureWorkerPool(WorkerPoolConfig(max_workers=max_workers))
 
         def work(feature: FeatureRule) -> FeatureCodingResult:
@@ -174,6 +173,7 @@ class ProductCodingAgent:
             result.audit["parallel_safe"] = True
             result.audit["worker_thread"] = worker_thread
             result.audit["worker_pool"] = "feature_worker_pool"
+            result.audit["product_context_indexed"] = True
             result.audit.update(_feature_audit_metadata(feature))
             if not should_retry:
                 return result
@@ -186,7 +186,6 @@ class ProductCodingAgent:
                     "reason": f"Follow-up evidence collection after review gate: {retry_reason}; details={result.missing_evidence or result.conflicts}",
                 }
             )
-
 
     @staticmethod
     def _attach_artifact_quality(results: list[FeatureCodingResult], artifact_quality_report: dict[str, Any]) -> None:
