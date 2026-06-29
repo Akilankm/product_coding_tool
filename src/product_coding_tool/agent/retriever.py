@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..models import ArtifactInventory, EvidencePacket, EvidencePlan, FeatureRule
+from ..artifacts.context import ProductArtifactContext
 from ..artifacts.evidence_packet import EvidencePacketBuilder
 from ..artifacts.navigator import ArtifactNavigator
 from ..artifacts.reader import ArtifactReader
@@ -10,10 +11,16 @@ from .visual import VisualEvidenceCollector
 
 
 class EvidenceRetriever:
-    def __init__(self, navigator: ArtifactNavigator, reader: ArtifactReader | None = None) -> None:
+    def __init__(
+        self,
+        navigator: ArtifactNavigator,
+        reader: ArtifactReader | None = None,
+        context: ProductArtifactContext | None = None,
+    ) -> None:
         self.navigator = navigator
         self.reader = reader or ArtifactReader(navigator)
-        self.builder = EvidencePacketBuilder(navigator, self.reader)
+        self.context = context
+        self.builder = EvidencePacketBuilder(navigator, self.reader, context=context)
         self.visual = VisualEvidenceCollector(navigator, self.reader)
 
     def retrieve(self, feature: FeatureRule, inventory: ArtifactInventory, plan: EvidencePlan) -> EvidencePacket:
