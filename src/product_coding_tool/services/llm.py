@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import time
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,7 @@ class LLMConfig:
     max_retries: int = 4
     transport: str = "openai"
     chat_completions_url: str = ""
+    global_concurrency: int = 6
 
     @classmethod
     def from_global(cls, cfg: Config | None = None) -> "LLMConfig":
@@ -53,6 +54,7 @@ class LLMConfig:
             max_retries=cfg.llm_max_retries,
             transport=(cfg.llm_transport or "openai").strip().lower(),
             chat_completions_url=cfg.llm_chat_completions_url,
+            global_concurrency=max(1, cfg.coding_global_llm_concurrency),
         )
 
     @property
@@ -61,14 +63,7 @@ class LLMConfig:
 
     @property
     def chat_url(self) -> str:
-        """Return the chat-completions URL for Azure OpenAI or compatible gateways.
-
-        Supported forms:
-        - PCT_LLM_CHAT_COMPLETIONS_URL explicitly set: used as-is.
-        - PCT/PCA_LLM_ENDPOINT already points to a chat-completions endpoint: used as-is.
-        - Standard Azure endpoint root: builds
-          /openai/deployments/{deployment}/chat/completions?api-version={api_version}
-        """
+        """Return the chat-completions URL for Azure OpenAI or compatible gateways."""
         if self.chat_completions_url.strip():
             return self.chat_completions_url.strip()
 
@@ -115,7 +110,7 @@ def get_llm_service(config: LLMConfig | None = None) -> "LLMService":
 
 
 class LLMService:
-    """Thin wrapper around chat completions with text and image support."""
+    """Thin wrapper around chat completions with text/image support and bounded concurrency."""
 
     _cumulative_prompt: int = 0
     _cumulative_completion: int = 0
@@ -124,6 +119,7 @@ class LLMService:
 
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or LLMConfig.from_global()
+        self._call_semaphore = BoundedSemaphore(max(1, self.config.global_concurrency))
         if not self.config.api_key or not self.config.endpoint or not self.config.deployment:
             raise RuntimeError(
                 "LLM is enabled, but one or more required settings are missing: "
@@ -160,16 +156,12 @@ class LLMService:
         )
 
     def health_check(self) -> None:
-        """Send one tiny request before a batch starts so bad LLM config fails fast.
-
-        This prevents many parallel feature workers from repeatedly calling a bad
-        endpoint/deployment and hiding the root cause in noisy retry logs.
-        """
         logger.info(
-            "LLM preflight start transport={} endpoint={} deployment={}",
+            "LLM preflight start transport={} endpoint={} deployment={} global_concurrency={}",
             self.config.transport,
             _redact_endpoint(self.config.endpoint),
             self.config.deployment,
+            self.config.global_concurrency,
         )
         self.predict(
             "Return exactly: OK",
@@ -219,21 +211,30 @@ class LLMService:
         response_format: dict[str, Any] | None = None,
         purpose: str = "",
     ) -> LLMResponse:
-        if self.config.transport in {"openai", "sdk", "azureopenai"}:
-            return self._call_openai_sdk(
+        acquired = self._call_semaphore.acquire(timeout=max(30.0, self.config.read_timeout))
+        if not acquired:
+            raise TimeoutError(
+                f"Timed out waiting for LLM concurrency slot purpose={purpose!r} "
+                f"limit={self.config.global_concurrency}"
+            )
+        try:
+            if self.config.transport in {"openai", "sdk", "azureopenai"}:
+                return self._call_openai_sdk(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    response_format=response_format,
+                    purpose=purpose,
+                )
+            return self._call_httpx(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 response_format=response_format,
                 purpose=purpose,
             )
-        return self._call_httpx(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            response_format=response_format,
-            purpose=purpose,
-        )
+        finally:
+            self._call_semaphore.release()
 
     def _base_payload(
         self,
