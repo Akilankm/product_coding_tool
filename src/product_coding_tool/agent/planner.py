@@ -1,4 +1,9 @@
-"""LLM-driven evidence planner with deterministic fallback."""
+"""Evidence planner.
+
+Default mode is deterministic and data-driven: it uses the artifact contract plus
+FeatureRule metadata (`feature_name`, aliases, evidence_hints, allowed_values,
+requires_visual). It does not hardcode product-coded values.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ class EvidencePlanner:
                 update={
                     "reason": (
                         f"Deterministic evidence plan used; coding_planner_mode={mode}. "
-                        "This avoids one LLM planner call per feature and uses default strong artifact sources plus feature terms."
+                        "The plan is generated from FeatureRule metadata and the scrape artifact contract."
                     )
                 }
             )
@@ -78,29 +83,17 @@ class EvidencePlanner:
             "retailer/product_evidence.md",
             "retailer/claims.md",
         ]
-        terms = feature.evidence_terms
-        lname = feature.feature_name.lower()
-        if feature.requires_visual or any(x in lname for x in ["color", "colour", "character", "figure", "package", "packaging", "pieces", "image"]):
+        needs_vision = bool(feature.requires_visual)
+        if needs_vision:
             files.extend(["retailer/vision.md", "retailer/manifests/image_manifest.json"])
-            needs_vision = True
-        else:
-            needs_vision = False
-        if "battery" in lname:
-            terms.extend(["battery", "batteries", "AA", "AAA", "requires", "included"])
-        if "age" in lname:
-            terms.extend(["age", "years", "months", "+", "recommended", "suitable"])
-        if "brand" in lname:
-            terms.extend(["brand", "manufacturer", "producer", "made by"])
-        if "manufacturer" in lname or "manuf" in lname:
-            terms.extend(["manufacturer", "producer", "vendor", "brand", "made by"])
         return self._merge_safety_defaults(
             feature,
             EvidencePlan(
-                evidence_queries=_dedupe(terms),
+                evidence_queries=_dedupe(feature.evidence_terms),
                 files_to_read=_dedupe(files),
                 needs_vision=needs_vision,
-                needs_images=feature.requires_visual,
-                reason="Deterministic fallback plan based on feature name, aliases, allowed values, and default scrape artifact sources.",
+                needs_images=needs_vision,
+                reason="Deterministic plan from FeatureRule metadata and default local artifact sources.",
             ),
         )
 
