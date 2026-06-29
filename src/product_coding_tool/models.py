@@ -245,6 +245,7 @@ class ProductBatchCodingRequest(BaseModel):
     max_iterations: int = 1
     max_parallel_features: int | None = None
     max_parallel_products: int | None = None
+    coding_mode: str | None = None
     llm_preflight: bool | None = None
 
     @model_validator(mode="after")
@@ -259,6 +260,8 @@ class ProductBatchCodingRequest(BaseModel):
             raise ValueError("max_parallel_features must be >= 1 when provided")
         if self.max_parallel_products is not None and self.max_parallel_products < 1:
             raise ValueError("max_parallel_products must be >= 1 when provided")
+        if self.coding_mode is not None and self.coding_mode.strip().lower() not in {"per_product", "product", "bulk", "auto", "per_feature", "feature"}:
+            raise ValueError("coding_mode must be one of: per_product, product, bulk, auto, per_feature, feature")
         return self
 
 
