@@ -1,4 +1,4 @@
-﻿PG_name,features,type,allowed_values,description
+PG_name,features,type,allowed_values,description
 All Other Miscellaneous Toys,BRAND,open_set,,"A brand is a property such as a name, logo or symbol that is owned by a specific manufacturer and used to distinguish its products from those of other companies. The examples apply to all product groups in Toys Panel"
 All Other Miscellaneous Toys,MANUFACTURER,open_set,,Describes the company that is the owner/manufacturer of a brand. One manufacturer can own several brands. In case a license is coded as brand do not code the license owner but the manufacturer of the product (as mentioned on the package)
 All Other Miscellaneous Toys,TYPE,closed_set,Trading Cards & Collectible; Stickers; Trading Card Games; Stickers & Stickerbooks & Tattoos; Kids Furniture; Bath Toys; Other Toys,Type of the toy/ Category

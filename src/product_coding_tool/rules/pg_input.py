@@ -1,26 +1,20 @@
-"""Load the canonical PG feature input CSV for product coding.
+"""Load and resolve the canonical PG feature input CSV for product coding.
 
-Canonical CSV contract (exactly the contract expected by the notebook/CLI):
+Canonical CSV contract:
 
 PG_name,features,type,allowed_values,description
 
-- PG_name: Product group name, e.g. "Figures/Build Sets"
-- features: Feature name to code, e.g. "BRAND" or "TYPE TOY"
-- type: "open_set" or "closed_set"
-- allowed_values: semicolon-separated values for closed_set features; blank for open_set
-- description: concise rulebook definition / coding hint
-
-The product coding tool takes two runtime inputs:
-1. an existing scrape artifact folder
-2. this 5-column PG feature CSV
-
-It does not perform web search or scraping.
+The product coding batch CSV must ultimately use the same canonical PG names as
+this file. The resolver is intentionally tolerant for legacy/batch aliases such
+as ``ALL OTHER MISC. TOYS`` and ``TOY VEHICLES/PLAYSET`` so product rows do not
+fail because of punctuation, abbreviations, casing, or singular/plural drift.
 """
 
 from __future__ import annotations
 
 import csv
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -37,14 +31,18 @@ class PGFeatureInputError(ValueError):
 class PGFeatureInputProvider:
     """Adapter for the 5-column PG-to-feature CSV.
 
-    The file can contain all PGs. At runtime, select one PG with `pg_name` and
-    the provider returns `FeatureRule` objects consumed by ProductCodingAgent.
+    Runtime uses the canonical PG_name from this file. Batch labels are resolved
+    to that canonical value before coding, and output context is rewritten to the
+    canonical PG name while preserving PG_name_original separately.
     """
 
     def __init__(self, rows: Iterable[dict[str, Any]]) -> None:
         self.rows = [_normalize_row(row, idx + 1) for idx, row in enumerate(rows)]
         if not self.rows:
             raise PGFeatureInputError("PG feature input has no rows.")
+        self._pg_names = _unique_preserve_order(str(row.get("PG_name") or "").strip() for row in self.rows)
+        self._canonical_by_key = {_pg_match_key(name): name for name in self._pg_names}
+        self._alias_to_canonical_key = self._build_alias_index()
 
     @classmethod
     def from_file(cls, path: str | Path) -> "PGFeatureInputProvider":
@@ -58,61 +56,84 @@ class PGFeatureInputProvider:
         return cls(_read_csv(path))
 
     def pg_names(self) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
-        for row in self.rows:
-            name = str(row.get("PG_name") or "").strip()
-            key = _clean_key(name)
-            if name and key not in seen:
-                out.append(name)
-                seen.add(key)
-        return out
-
+        return list(self._pg_names)
 
     def resolve_pg_name(self, pg_name: str) -> str:
-        """Resolve batch PG labels to the canonical PG_name present in the feature CSV.
+        """Resolve any supported batch PG label to the canonical feature CSV name.
 
-        Example: ``TOY VEHICLES/PLAYSET`` resolves to ``Vehicles / Playsets``.
+        Examples:
+        - ``TOY VEHICLES/PLAYSET`` -> ``Vehicles / Playsets``
+        - ``ALL OTHER MISC. TOYS`` -> ``All Other Miscellaneous Toys``
+        - ``INFANT/PRESCHOOL TOY`` -> ``Infant / Preschool Toys``
         """
-        rows = self._match_rows_for_pg(pg_name)
-        if not rows:
-            available = ", ".join(self.pg_names()[:20])
-            raise PGFeatureInputError(
-                f"No features matched pg_name={pg_name!r}. Available PGs: {available}"
+        canonical = self._resolve_pg_name_or_none(pg_name)
+        if canonical:
+            return canonical
+        available = ", ".join(self.pg_names()[:30])
+        raise PGFeatureInputError(
+            f"No features matched pg_name={pg_name!r}. Available PGs: {available}"
+        )
+
+    def canonicalization_audit(self, pg_names: Iterable[str]) -> list[dict[str, Any]]:
+        """Return an audit table for batch PG labels against canonical PG names."""
+        out: list[dict[str, Any]] = []
+        for raw in pg_names:
+            raw_str = str(raw or "").strip()
+            canonical = self._resolve_pg_name_or_none(raw_str)
+            out.append(
+                {
+                    "original_pg_name": raw_str,
+                    "resolved_pg_name": canonical or "",
+                    "matched": bool(canonical),
+                    "original_key": _pg_match_key(raw_str),
+                    "resolved_key": _pg_match_key(canonical) if canonical else "",
+                }
             )
-        return str(rows[0].get("PG_name") or "").strip()
+        return out
 
-    def _match_rows_for_pg(self, pg_name: str) -> list[dict[str, Any]]:
+    def _resolve_pg_name_or_none(self, pg_name: str) -> str | None:
         target_key = _pg_match_key(pg_name)
-        rows = [row for row in self.rows if _pg_match_key(row.get("PG_name")) == target_key]
-        if rows:
-            return rows
+        if not target_key:
+            return None
 
-        alias_key = _BUILTIN_PG_ALIASES.get(target_key)
-        if alias_key:
-            rows = [row for row in self.rows if _pg_match_key(row.get("PG_name")) == alias_key]
-            if rows:
-                return rows
+        if target_key in self._canonical_by_key:
+            return self._canonical_by_key[target_key]
 
-        # Conservative token-overlap fallback for batch labels that contain extra words
-        # such as "TOY" or use singular/plural forms. Only accept a clear best match.
-        target_tokens = set(target_key.split())
-        best_score = 0.0
+        alias_key = self._alias_to_canonical_key.get(target_key) or _BUILTIN_PG_ALIASES.get(target_key)
+        if alias_key and alias_key in self._canonical_by_key:
+            return self._canonical_by_key[alias_key]
+
+        # Conservative similarity fallback after normalization/abbreviation expansion.
+        # This catches small punctuation/name variations without accepting unrelated PGs.
         best_key = ""
-        for candidate in self.pg_names():
-            cand_key = _pg_match_key(candidate)
-            cand_tokens = set(cand_key.split())
-            if not target_tokens or not cand_tokens:
-                continue
-            overlap = len(target_tokens & cand_tokens)
-            union = len(target_tokens | cand_tokens)
-            score = overlap / union if union else 0.0
+        best_score = 0.0
+        for cand_key in self._canonical_by_key:
+            score = _pg_similarity(target_key, cand_key)
             if score > best_score:
                 best_score = score
                 best_key = cand_key
-        if best_score >= 0.75 and best_key:
-            return [row for row in self.rows if _pg_match_key(row.get("PG_name")) == best_key]
-        return []
+        if best_key and best_score >= 0.88:
+            return self._canonical_by_key[best_key]
+        return None
+
+    def _build_alias_index(self) -> dict[str, str]:
+        alias_to_key: dict[str, str] = {}
+        for canonical in self._pg_names:
+            key = _pg_match_key(canonical)
+            variants = _pg_alias_variants(canonical)
+            for variant in variants:
+                alias_to_key[_pg_match_key(variant)] = key
+        # Explicit historical/batch aliases seen in the validation input.
+        for alias, canonical_like in _EXPLICIT_CANONICAL_ALIAS_TEXT.items():
+            canonical_key = _pg_match_key(canonical_like)
+            if canonical_key in self._canonical_by_key:
+                alias_to_key[_pg_match_key(alias)] = canonical_key
+        return alias_to_key
+
+    def _match_rows_for_pg(self, pg_name: str) -> list[dict[str, Any]]:
+        canonical = self.resolve_pg_name(pg_name)
+        canonical_key = _pg_match_key(canonical)
+        return [row for row in self.rows if _pg_match_key(row.get("PG_name")) == canonical_key]
 
     def filter_rows(
         self,
@@ -160,8 +181,6 @@ def row_to_feature_rule(row: dict[str, Any]) -> FeatureRule:
     allowed_values = _split_list(row.get("allowed_values") or "")
     description = str(row.get("description") or "").strip()
 
-    # User-facing CSV intentionally does not carry feature_id. Generate a stable
-    # internal ID from PG + feature so outputs and audits still have a non-blank identifier.
     feature_id = _feature_id(pg_name, feature_name)
 
     return FeatureRule(
@@ -187,7 +206,6 @@ def _read_csv(path: Path) -> list[dict[str, Any]]:
 
 
 def _normalize_row(row: dict[str, Any], row_order: int) -> dict[str, Any]:
-    # Normalize by case/spacing while preserving canonical output keys.
     by_norm = {_normalize_col(k): ("" if v is None else v) for k, v in row.items()}
     missing = sorted(_REQUIRED_NORMALIZED - set(by_norm))
     if missing:
@@ -216,7 +234,6 @@ def _normalize_row(row: dict[str, Any], row_order: int) -> dict[str, Any]:
             f"Row {row_order} feature={normalized['features']!r} is closed_set but allowed_values is blank."
         )
     if normalized["type"] == "open_set":
-        # Keep open-set allowed values empty even if a user accidentally puts whitespace.
         normalized["allowed_values"] = ""
     return normalized
 
@@ -247,24 +264,59 @@ def _clean_key(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
-_BUILTIN_PG_ALIASES = {
-    "vehicle playset": "vehicle playset",
-    "toy vehicle playset": "vehicle playset",
-    "vehicles playset": "vehicle playset",
-    "toy vehicles playset": "vehicle playset",
-    "toy vehicle playsets": "vehicle playset",
-    "toy vehicles playsets": "vehicle playset",
+def _pg_similarity(left: str, right: str) -> float:
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    sequence = SequenceMatcher(None, left, right).ratio()
+    return max(overlap, sequence)
+
+
+_STOPWORDS = {"pg", "product", "group", "toy", "toys"}
+_TOKEN_REPLACEMENTS = {
+    "misc": "miscellaneous",
+    "miscellaneous": "miscellaneous",
+    "educat": "educat",
+    "electr": "electr",
+    "leis": "leis",
+    "vehicle": "vehicle",
+    "vehicles": "vehicle",
+    "playset": "playset",
+    "playsets": "playset",
+    "figure": "figure",
+    "figures": "figure",
+    "game": "game",
+    "games": "game",
+    "puzzle": "puzzle",
+    "puzzles": "puzzle",
+    "doll": "doll",
+    "dolls": "doll",
+    "craft": "craft",
+    "crafts": "craft",
+    "puppet": "puppet",
+    "puppets": "puppet",
+    "sport": "sport",
+    "sports": "sport",
 }
 
 
 def _pg_match_key(value: Any) -> str:
     raw = str(value or "").lower()
+    # Normalize common abbreviations before token extraction.
+    raw = raw.replace("misc.", "miscellaneous")
+    raw = raw.replace("misc ", "miscellaneous ")
+    raw = raw.replace("misc/", "miscellaneous/")
     tokens = re.findall(r"[a-z0-9]+", raw)
     normalized: list[str] = []
     for token in tokens:
-        if token in {"pg", "product", "group", "toy", "toys"}:
+        if token in _STOPWORDS:
             continue
-        normalized.append(_singularize_token(token))
+        token = _TOKEN_REPLACEMENTS.get(token, token)
+        token = _singularize_token(token)
+        if token and token not in _STOPWORDS:
+            normalized.append(token)
     return " ".join(normalized)
 
 
@@ -274,6 +326,59 @@ def _singularize_token(token: str) -> str:
     if len(token) > 4 and token.endswith("s") and not token.endswith(("ss", "ous")):
         return token[:-1]
     return token
+
+
+_EXPLICIT_CANONICAL_ALIAS_TEXT = {
+    "ALL OTHER MISC. TOYS": "All Other Miscellaneous Toys",
+    "ALL OTHER MISC TOYS": "All Other Miscellaneous Toys",
+    "ALL OTHER MISCELLANEOUS TOYS": "All Other Miscellaneous Toys",
+    "TOY VEHICLES/PLAYSET": "Vehicles / Playsets",
+    "TOY VEHICLES PLAYSET": "Vehicles / Playsets",
+    "TOY VEHICLES/PLAYSETS": "Vehicles / Playsets",
+    "VEHICLES/PLAYSET": "Vehicles / Playsets",
+    "VEHICLES PLAYSET": "Vehicles / Playsets",
+    "INFANT/PRESCHOOL TOY": "Infant / Preschool Toys",
+    "INFANT PRESCHOOL TOY": "Infant / Preschool Toys",
+    "INFANT/PRESCHOOL TOYS": "Infant / Preschool Toys",
+    "FIGURES/BUILD SETS": "Figures/Build Sets",
+    "FIGURES BUILD SETS": "Figures/Build Sets",
+    "GAMES/PUZZLES": "Games/Puzzles",
+    "GAMES PUZZLES": "Games/Puzzles",
+    "DOLLS/FASHION TOYS": "Dolls/Fashion Toys",
+    "DOLLS FASHION TOYS": "Dolls/Fashion Toys",
+    "ELECTR/EDUCAT TOYS": "Electr/Educat Toys",
+    "ELECTR EDUCAT TOYS": "Electr/Educat Toys",
+    "PRETEND PLAY": "Pretend Play",
+    "ARTS/CRAFTS TOYS": "ARTS/CRAFTS TOYS",
+    "ARTS CRAFTS TOYS": "ARTS/CRAFTS TOYS",
+    "PLUSH/PUPPETS TOYS": "PLUSH/PUPPETS TOYS",
+    "PLUSH PUPPETS TOYS": "PLUSH/PUPPETS TOYS",
+    "SPORTS/LEIS. TOYS": "SPORTS/LEIS. TOYS",
+    "SPORTS LEIS. TOYS": "SPORTS/LEIS. TOYS",
+}
+
+_BUILTIN_PG_ALIASES = {
+    _pg_match_key(alias): _pg_match_key(canonical)
+    for alias, canonical in _EXPLICIT_CANONICAL_ALIAS_TEXT.items()
+}
+
+
+def _pg_alias_variants(canonical_name: str) -> list[str]:
+    """Generate likely legacy aliases from a canonical PG name."""
+    name = canonical_name.strip()
+    no_slash = re.sub(r"[/]+", " ", name)
+    no_punct = re.sub(r"[^A-Za-z0-9]+", " ", name)
+    variants = {name, no_slash, no_punct, no_punct.upper()}
+    if "Miscellaneous" in name:
+        variants.add(name.replace("Miscellaneous", "Misc."))
+        variants.add(name.replace("Miscellaneous", "Misc"))
+    if "Vehicles" in name:
+        variants.add("TOY VEHICLES/PLAYSET")
+        variants.add("TOY VEHICLES/PLAYSETS")
+    if "Infant" in name and "Preschool" in name:
+        variants.add("INFANT/PRESCHOOL TOY")
+        variants.add("INFANT/PRESCHOOL TOYS")
+    return list(variants)
 
 
 def _normalize_col(name: Any) -> str:
@@ -298,6 +403,17 @@ def _feature_id(pg_name: str, feature_name: str) -> str:
     raw = f"{pg_name}__{feature_name}"
     slug = re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_").upper()
     return slug or "FEATURE"
+
+
+def _unique_preserve_order(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        key = _pg_match_key(value)
+        if value and key not in seen:
+            out.append(value)
+            seen.add(key)
+    return out
 
 
 __all__ = ["PGFeatureInputError", "PGFeatureInputProvider", "row_to_feature_rule"]

@@ -3,7 +3,7 @@
 
 Batch example:
     python scripts/run_product_coding.py \
-      --batch-input examples/product_batch_input_with_pg_name.csv \
+      --batch-input examples/product_batch_input_canonical_pg_names.csv \
       --scraped-root data/scraped \
       --pg-feature-input examples/pg_feature_coding_input.csv \
       --output-dir data/coded/batch_run \

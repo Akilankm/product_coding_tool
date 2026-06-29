@@ -1,6 +1,6 @@
 [project]
 name = "product-coding-tool"
-version = "1.3.0"
+version = "1.3.1"
 description = "Standalone artifact-grounded product feature coding agent with batch product input CSV, scrape artifact root, canonical PG feature CSV, scraper-compatible AzureOpenAI LLM client, PG alias normalization, and feature-worker pool parallelism."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

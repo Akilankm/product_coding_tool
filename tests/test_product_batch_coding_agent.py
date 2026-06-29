@@ -134,3 +134,39 @@ def test_batch_product_coding_resolves_pg_alias_from_product_input(tmp_path: Pat
     assert len(result.products) == 1
     assert result.failed_products == []
     assert result.products[0].product_context["PG_name_resolved"] == "Vehicles / Playsets"
+
+
+def test_batch_product_coding_canonicalizes_output_pg_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PCT_LLM_ENABLED", "false")
+    scraped_root = tmp_path / "scraped"
+    make_artifact(scraped_root, "ROW_0006")
+    batch_csv = tmp_path / "product_batch.csv"
+    batch_csv.write_text(
+        "input_id,PG_name,main_text\nROW_0006,ALL OTHER MISC. TOYS,Other toy\n",
+        encoding="utf-8",
+    )
+    pg_csv = tmp_path / "pg_feature_coding_input.csv"
+    pg_csv.write_text(
+        "PG_name,features,type,allowed_values,description\n"
+        "All Other Miscellaneous Toys,BRAND,open_set,,Brand\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "coded"
+    result = ProductBatchCodingAgent().run(
+        ProductBatchCodingRequest(
+            batch_input_csv=batch_csv,
+            scraped_root=scraped_root,
+            pg_feature_input_csv=pg_csv,
+            output_dir=out,
+        )
+    )
+    assert len(result.products) == 1
+    assert result.failed_products == []
+    context = result.products[0].product_context
+    assert context["PG_name"] == "All Other Miscellaneous Toys"
+    assert context["PG_name_original"] == "ALL OTHER MISC. TOYS"
+    assert context["PG_name_resolved"] == "All Other Miscellaneous Toys"
+    with (out / "combined_coded_features.csv").open("r", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["PG_name"] == "All Other Miscellaneous Toys"
+    assert rows[0]["PG_name_original"] == "ALL OTHER MISC. TOYS"

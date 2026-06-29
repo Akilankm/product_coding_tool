@@ -51,6 +51,16 @@ class ProductBatchCodingAgent:
             request.scraped_root,
             request.pg_feature_input_csv,
         )
+        pg_name_audit = pg_provider.canonicalization_audit([row.pg_name for row in rows])
+        unmatched_pg_names = sorted({item["original_pg_name"] for item in pg_name_audit if not item["matched"]})
+        if unmatched_pg_names:
+            logger.error(
+                "Unmatched PG_name values before LLM calls: {}. Available canonical PGs: {}",
+                unmatched_pg_names,
+                pg_provider.pg_names(),
+            )
+        else:
+            logger.info("All product batch PG_name values resolved to canonical PG names")
         self._preflight_llm_if_needed(request)
 
         products: list[BatchCodingResult] = []
@@ -76,8 +86,11 @@ class ProductBatchCodingAgent:
                     len(features),
                 )
                 product_context = dict(row.fields)
+                # Make product output use the same canonical PG_name as the feature CSV.
+                # Keep the original batch label separately for audit/debugging.
                 product_context["PG_name_original"] = row.pg_name
                 product_context["PG_name_resolved"] = resolved_pg_name
+                product_context["PG_name"] = resolved_pg_name
                 product_result = self.product_agent.run(
                     CodingRequest(
                         artifact_dir=artifact_dir,

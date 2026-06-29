@@ -12,7 +12,7 @@ data/scraped/
   ROW_0002/
   ...
 
-product_batch_input_with_pg_name.csv
+product_batch_input_canonical_pg_names.csv
 pg_feature_coding_input.csv
 ```
 
@@ -68,6 +68,31 @@ PG_name,features,type,allowed_values,description
 - `allowed_values` is semicolon-separated and required for `closed_set`
 - `allowed_values` is blank for `open_set`
 
+
+## Canonical PG names
+
+The product batch CSV and the PG feature CSV now use the same canonical `PG_name` values.
+The bundled example batch file has already been fixed, so values such as:
+
+```text
+ALL OTHER MISC. TOYS      -> All Other Miscellaneous Toys
+TOY VEHICLES/PLAYSET     -> Vehicles / Playsets
+INFANT/PRESCHOOL TOY     -> Infant / Preschool Toys
+FIGURES/BUILD SETS       -> Figures/Build Sets
+GAMES/PUZZLES            -> Games/Puzzles
+DOLLS/FASHION TOYS       -> Dolls/Fashion Toys
+ELECTR/EDUCAT TOYS       -> Electr/Educat Toys
+```
+
+are stored canonically in:
+
+```text
+examples/product_batch_input_canonical_pg_names.csv
+examples/pg_feature_coding_input.csv
+```
+
+The code also preserves `PG_name_original` and `PG_name_resolved` in output context for auditability, but the output `PG_name` is canonical.
+
 ## Execution model
 
 For each row in the product batch CSV:
@@ -106,7 +131,7 @@ This installs notebook/runtime dependencies and registers the kernel.
 
 ```bash
 product-code \
-  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --batch-input examples/product_batch_input_canonical_pg_names.csv \
   --scraped-root data/scraped \
   --pg-feature-input examples/pg_feature_coding_input.csv \
   --output-dir data/coded/batch_run \
@@ -117,7 +142,7 @@ Smoke test:
 
 ```bash
 product-code \
-  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --batch-input examples/product_batch_input_canonical_pg_names.csv \
   --scraped-root data/scraped \
   --pg-feature-input examples/pg_feature_coding_input.csv \
   --output-dir data/coded/smoke \
@@ -130,7 +155,7 @@ Run specific rows:
 
 ```bash
 product-code \
-  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --batch-input examples/product_batch_input_canonical_pg_names.csv \
   --scraped-root data/scraped \
   --pg-feature-input examples/pg_feature_coding_input.csv \
   --input-id ROW_0001 \

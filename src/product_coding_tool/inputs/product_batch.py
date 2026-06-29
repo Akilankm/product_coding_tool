@@ -63,6 +63,28 @@ class ProductBatchInputProvider:
             rows = rows[: max(0, int(limit))]
         return rows
 
+    def write_canonical_pg_csv(self, path: str | Path, pg_provider: Any) -> Path:
+        """Write a copy of the product batch CSV with canonical PG_name values.
+
+        `pg_provider` must expose `resolve_pg_name`. This keeps the product batch
+        input names exactly aligned with `pg_feature_coding_input.csv`.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = _fieldnames_for_rows(self.rows)
+        if "PG_name_original" not in fieldnames:
+            fieldnames.append("PG_name_original")
+        with path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in self.rows:
+                out = dict(row.fields)
+                original_pg = row.pg_name
+                out["PG_name_original"] = original_pg
+                out["PG_name"] = pg_provider.resolve_pg_name(original_pg)
+                writer.writerow({field: out.get(field, "") for field in fieldnames})
+        return path
+
 
 def _read_csv(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -113,6 +135,21 @@ def _normalize_col(name: Any) -> str:
 
 def _clean_key(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+def _fieldnames_for_rows(rows: list[ProductInputRow]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in rows:
+        for field in row.fields.keys():
+            if field not in seen:
+                out.append(field)
+                seen.add(field)
+    for required in ["input_id", "PG_name"]:
+        if required not in seen:
+            out.insert(0 if required == "input_id" else len(out), required)
+            seen.add(required)
+    return out
 
 
 __all__ = ["ProductBatchInputError", "ProductBatchInputProvider"]

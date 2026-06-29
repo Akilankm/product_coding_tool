@@ -2,7 +2,7 @@
 
 ## Inputs
 
-1. `product_batch_input_with_pg_name.csv`
+1. `product_batch_input_canonical_pg_names.csv`
    - Required columns: `input_id`, `PG_name`
    - Other columns are product context.
 2. `data/scraped/`

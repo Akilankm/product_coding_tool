@@ -87,3 +87,31 @@ def test_pg_alias_normalizes_toy_vehicles_playset(tmp_path: Path) -> None:
     features = provider.features_for_pg(pg_name="TOY VEHICLES/PLAYSET")
     assert [f.feature_name for f in features] == ["BRAND", "TYPE"]
     assert all(f.pg_name == "Vehicles / Playsets" for f in features)
+
+
+def test_pg_alias_normalizes_validation_batch_pg_names(tmp_path: Path) -> None:
+    path = tmp_path / "pg_feature_coding_input.csv"
+    path.write_text(
+        "PG_name,features,type,allowed_values,description\n"
+        "All Other Miscellaneous Toys,BRAND,open_set,,Brand\n"
+        "Vehicles / Playsets,BRAND,open_set,,Brand\n"
+        "Infant / Preschool Toys,BRAND,open_set,,Brand\n"
+        "Figures/Build Sets,BRAND,open_set,,Brand\n"
+        "Games/Puzzles,BRAND,open_set,,Brand\n"
+        "Dolls/Fashion Toys,BRAND,open_set,,Brand\n"
+        "Electr/Educat Toys,BRAND,open_set,,Brand\n",
+        encoding="utf-8",
+    )
+    provider = PGFeatureInputProvider.from_file(path)
+    expected = {
+        "ALL OTHER MISC. TOYS": "All Other Miscellaneous Toys",
+        "ALL OTHER MISC TOYS": "All Other Miscellaneous Toys",
+        "TOY VEHICLES/PLAYSET": "Vehicles / Playsets",
+        "INFANT/PRESCHOOL TOY": "Infant / Preschool Toys",
+        "FIGURES/BUILD SETS": "Figures/Build Sets",
+        "GAMES/PUZZLES": "Games/Puzzles",
+        "DOLLS/FASHION TOYS": "Dolls/Fashion Toys",
+        "ELECTR/EDUCAT TOYS": "Electr/Educat Toys",
+    }
+    for raw, canonical in expected.items():
+        assert provider.resolve_pg_name(raw) == canonical
