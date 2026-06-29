@@ -7,7 +7,6 @@ weak/invalid features are selectively escalated to the existing per-feature loop
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from ..artifacts.context import ProductArtifactContextBuilder
