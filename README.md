@@ -2,35 +2,47 @@
 
 Standalone artifact-grounded product feature coding agent.
 
-## Latency and warning handling
+## High-grade fast runtime
 
-The default runtime is optimized for lower per-product latency:
-
-```bash
-# default: fastest / lowest-cost mode
-export PCT_CODING_PLANNER_MODE=deterministic
-export PCT_CODING_MAX_ITERATIONS=1
-
-# optional: restore exploratory LLM planning / one retry for experiments
-export PCT_CODING_PLANNER_MODE=llm
-export PCT_CODING_MAX_ITERATIONS=2
-```
-
-Why this helps:
+The production runtime is designed around three controls:
 
 ```text
-Before: planner LLM call + coding LLM call + possible retry per feature
-Now:   deterministic planner + one coding LLM call per feature by default
+1. ProductArtifactContextBuilder reads/indexes one product artifact once.
+2. Feature workers reuse that product context index for all feature evidence packets.
+3. Batch workers can run products in parallel, while the LLM service enforces a global concurrency cap.
+```
+
+Default settings:
+
+```bash
+export PCT_CODING_PLANNER_MODE=deterministic
+export PCT_CODING_MAX_ITERATIONS=1
+export PCT_CODING_MAX_PARALLEL_PRODUCTS=2
+export PCT_CODING_MAX_PARALLEL_FEATURES=3
+export PCT_CODING_GLOBAL_LLM_CONCURRENCY=6
+```
+
+This gives bounded fan-out:
+
+```text
+2 products x 3 feature workers = up to 6 feature coding tasks
+LLM semaphore = at most 6 concurrent gateway calls
+```
+
+For exploratory runs:
+
+```bash
+export PCT_CODING_PLANNER_MODE=llm
+export PCT_CODING_MAX_ITERATIONS=2
 ```
 
 Malformed `.json` scrape artifacts are handled as non-fatal artifact-quality warnings.
 The reader caches files per product and logs each malformed file only once, while outputting
 `artifact_quality_report.json` and `batch_artifact_quality_report.json` for audit.
 
-
 ## Runtime inputs
 
-The product coding runtime now takes exactly these three inputs:
+The product coding runtime takes exactly these three inputs:
 
 ```text
 data/scraped/
@@ -94,7 +106,6 @@ PG_name,features,type,allowed_values,description
 - `allowed_values` is semicolon-separated and required for `closed_set`
 - `allowed_values` is blank for `open_set`
 
-
 ## Canonical PG names
 
 The product batch CSV and the PG feature CSV now use the same canonical `PG_name` values.
@@ -126,26 +137,39 @@ For each row in the product batch CSV:
 ```text
 input_id -> locate scrape artifact folder
 PG_name  -> select features from pg_feature_coding_input.csv
+artifact -> build one ProductArtifactContext index
 feature list -> run ProductCodingAgent
 ```
 
 Inside each product, feature coding is parallelized:
 
 ```text
-4 workers + 8 features
+3 workers + 8 features
   worker_1 -> feature_1 -> next available feature
   worker_2 -> feature_2 -> next available feature
   worker_3 -> feature_3 -> next available feature
-  worker_4 -> feature_4 -> next available feature
+```
+
+Across the batch, product coding is also bounded-parallel:
+
+```text
+product_worker_1 -> ROW_0001 -> ROW_0003 -> ...
+product_worker_2 -> ROW_0002 -> ROW_0004 -> ...
+```
+
+The LLM service protects the gateway:
+
+```text
+PCT_CODING_GLOBAL_LLM_CONCURRENCY=6
 ```
 
 Each feature worker performs its own sequential agent loop:
 
 ```text
-plan evidence -> collect artifact evidence -> code value -> review gate -> retry only when productive
+plan evidence -> collect artifact evidence from product context index -> code value -> review gate -> retry only when productive
 ```
 
-The review gate now logs a per-feature `iteration_trace` with the retry decision and reason.
+The review gate logs a per-feature `iteration_trace` with the retry decision and reason.
 Closed-set values that are outside the supplied allowed list are marked for manual review instead
 of repeatedly calling the LLM with the same evidence.
 
@@ -165,7 +189,8 @@ product-code \
   --scraped-root data/scraped \
   --pg-feature-input examples/pg_feature_coding_input.csv \
   --output-dir data/coded/batch_run \
-  --max-parallel-features 4
+  --max-parallel-products 2 \
+  --max-parallel-features 3
 ```
 
 Smoke test:
@@ -178,7 +203,8 @@ product-code \
   --output-dir data/coded/smoke \
   --limit-products 2 \
   --limit-features 3 \
-  --max-parallel-features 4
+  --max-parallel-products 1 \
+  --max-parallel-features 2
 ```
 
 Run specific rows:
@@ -200,7 +226,7 @@ product-code \
   --pg-name "TOY VEHICLES/PLAYSET" \
   --pg-feature-input examples/pg_feature_coding_input.csv \
   --output-dir data/coded/ROW_0001_debug \
-  --max-parallel-features 4
+  --max-parallel-features 3
 ```
 
 ## Outputs
@@ -255,6 +281,7 @@ PCT_CODING_MAX_EVIDENCE_ITEMS=12
 PCT_CODING_MAX_EVIDENCE_CHARS=18000
 PCT_CODING_EVIDENCE_CONTEXT_CHARS=900
 PCT_CODING_READ_FILE_CHARS=6000
+PCT_CODING_CONTEXT_INDEX_FILE_CHARS=12000
 ```
 
 ## Environment
@@ -265,10 +292,12 @@ The LLM transport defaults to the same scraper-compatible AzureOpenAI SDK path u
 PCT_LLM_TRANSPORT=openai
 ```
 
-Feature parallelism:
+Parallelism:
 
 ```bash
-PCT_CODING_MAX_PARALLEL_FEATURES=4
+PCT_CODING_MAX_PARALLEL_PRODUCTS=2
+PCT_CODING_MAX_PARALLEL_FEATURES=3
+PCT_CODING_GLOBAL_LLM_CONCURRENCY=6
 ```
 
 Evidence/retry defaults are deliberately conservative to reduce repeated large LLM calls:
