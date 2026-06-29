@@ -169,10 +169,10 @@ The combined CSV includes product context plus coded feature values.
 
 ## Environment
 
-The LLM transport defaults to direct HTTP to avoid OpenAI SDK import conflicts:
+The LLM transport defaults to the same scraper-compatible AzureOpenAI SDK path used by `product_scrape_tool`:
 
 ```bash
-PCT_LLM_TRANSPORT=httpx
+PCT_LLM_TRANSPORT=openai
 ```
 
 Feature parallelism:

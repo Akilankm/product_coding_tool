@@ -243,6 +243,7 @@ class ProductBatchCodingRequest(BaseModel):
     limit_features: int | None = None
     max_iterations: int = 3
     max_parallel_features: int | None = None
+    llm_preflight: bool | None = None
 
     @model_validator(mode="after")
     def validate_batch_request(self) -> "ProductBatchCodingRequest":

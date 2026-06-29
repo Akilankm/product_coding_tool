@@ -25,6 +25,8 @@ from .models import (
 )
 from .outputs.writer import ProductBatchResultWriter
 from .rules.pg_input import PGFeatureInputProvider
+from .config import get_config
+from .services.llm import get_llm_service
 
 
 class ProductBatchCodingAgent:
@@ -49,6 +51,7 @@ class ProductBatchCodingAgent:
             request.scraped_root,
             request.pg_feature_input_csv,
         )
+        self._preflight_llm_if_needed(request)
 
         products: list[BatchCodingResult] = []
         failed: list[FailedProductCodingResult] = []
@@ -58,25 +61,30 @@ class ProductBatchCodingAgent:
         for row in rows:
             artifact_dir = request.scraped_root / row.input_id
             try:
-                features = pg_provider.features_for_pg(pg_name=row.pg_name, limit=request.limit_features)
+                resolved_pg_name = pg_provider.resolve_pg_name(row.pg_name)
+                features = pg_provider.features_for_pg(pg_name=resolved_pg_name, limit=request.limit_features)
                 if not artifact_dir.exists():
                     raise FileNotFoundError(
                         f"Scrape artifact folder not found for input_id={row.input_id}: {artifact_dir}"
                     )
                 logger.info(
-                    "Coding product input_id={} pg_name={} artifact={} features={}",
+                    "Coding product input_id={} pg_name={} resolved_pg_name={} artifact={} features={}",
                     row.input_id,
                     row.pg_name,
+                    resolved_pg_name,
                     artifact_dir,
                     len(features),
                 )
+                product_context = dict(row.fields)
+                product_context["PG_name_original"] = row.pg_name
+                product_context["PG_name_resolved"] = resolved_pg_name
                 product_result = self.product_agent.run(
                     CodingRequest(
                         artifact_dir=artifact_dir,
                         features=features,
                         output_dir=output_root / row.input_id,
                         product_id=row.input_id,
-                        product_context=row.fields,
+                        product_context=product_context,
                         max_iterations=request.max_iterations,
                         max_parallel_features=request.max_parallel_features,
                     )
@@ -95,6 +103,23 @@ class ProductBatchCodingAgent:
             output_root,
         )
         return result
+
+    def _preflight_llm_if_needed(self, request: ProductBatchCodingRequest) -> None:
+        cfg = get_config()
+        should_preflight = cfg.llm_preflight_enabled if request.llm_preflight is None else request.llm_preflight
+        if not cfg.llm_enabled or not should_preflight:
+            logger.info("LLM preflight skipped llm_enabled={} llm_preflight={}", cfg.llm_enabled, should_preflight)
+            return
+        try:
+            get_llm_service().health_check()
+        except Exception as exc:  # noqa: BLE001 - convert to clear batch-start failure.
+            raise RuntimeError(
+                "LLM preflight failed before product coding started. "
+                "Check PCT/PCA_LLM_ENDPOINT, PCT/PCA_LLM_DEPLOYMENT, API version, API key, "
+                "and consumer header. Set PCT_LLM_PREFLIGHT_ENABLED=false or pass "
+                "--skip-llm-preflight only for deterministic/offline debugging. "
+                f"Original error: {exc}"
+            ) from exc
 
 
 def _failed(row: ProductInputRow, artifact_dir: Path, exc: Exception) -> FailedProductCodingResult:

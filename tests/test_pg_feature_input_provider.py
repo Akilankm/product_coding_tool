@@ -72,3 +72,18 @@ def test_multiple_pgs_require_pg_name(tmp_path: Path) -> None:
     provider = PGFeatureInputProvider.from_file(path)
     with pytest.raises(PGFeatureInputError, match="multiple PGs"):
         provider.features_for_pg()
+
+
+def test_pg_alias_normalizes_toy_vehicles_playset(tmp_path: Path) -> None:
+    path = tmp_path / "pg_feature_coding_input.csv"
+    path.write_text(
+        "PG_name,features,type,allowed_values,description\n"
+        "Vehicles / Playsets,BRAND,open_set,,Brand\n"
+        "Vehicles / Playsets,TYPE,closed_set,Die Cast; Playsets,Type\n",
+        encoding="utf-8",
+    )
+    provider = PGFeatureInputProvider.from_file(path)
+    assert provider.resolve_pg_name("TOY VEHICLES/PLAYSET") == "Vehicles / Playsets"
+    features = provider.features_for_pg(pg_name="TOY VEHICLES/PLAYSET")
+    assert [f.feature_name for f in features] == ["BRAND", "TYPE"]
+    assert all(f.pg_name == "Vehicles / Playsets" for f in features)

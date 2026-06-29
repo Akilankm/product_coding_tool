@@ -46,6 +46,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Maximum features to code concurrently per product. Defaults to PCT/PCA_CODING_MAX_PARALLEL_FEATURES.",
     )
+    parser.add_argument(
+        "--skip-llm-preflight",
+        action="store_true",
+        help="Skip the one-call LLM preflight check before batch mode starts.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
 
@@ -76,6 +81,7 @@ def main(argv: list[str] | None = None) -> None:
             limit_features=args.limit_features,
             max_iterations=max(1, args.max_iterations),
             max_parallel_features=args.max_parallel_features,
+            llm_preflight=not args.skip_llm_preflight,
         )
         result = ProductBatchCodingAgent().run(request)
         print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))

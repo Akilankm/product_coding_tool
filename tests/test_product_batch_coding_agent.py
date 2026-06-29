@@ -105,3 +105,32 @@ def test_batch_product_coding_records_missing_artifact_as_failed_product(tmp_pat
     assert len(result.failed_products) == 1
     assert result.failed_products[0].input_id == "ROW_MISSING"
     assert (out / "failed_products.csv").exists()
+
+
+def test_batch_product_coding_resolves_pg_alias_from_product_input(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PCT_LLM_ENABLED", "false")
+    scraped_root = tmp_path / "scraped"
+    make_artifact(scraped_root, "ROW_0001")
+    batch_csv = tmp_path / "product_batch.csv"
+    batch_csv.write_text(
+        "input_id,PG_name,main_text\nROW_0001,TOY VEHICLES/PLAYSET,Vehicle demo\n",
+        encoding="utf-8",
+    )
+    pg_csv = tmp_path / "pg_feature_coding_input.csv"
+    pg_csv.write_text(
+        "PG_name,features,type,allowed_values,description\n"
+        "Vehicles / Playsets,BRAND,open_set,,Brand\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "coded"
+    result = ProductBatchCodingAgent().run(
+        ProductBatchCodingRequest(
+            batch_input_csv=batch_csv,
+            scraped_root=scraped_root,
+            pg_feature_input_csv=pg_csv,
+            output_dir=out,
+        )
+    )
+    assert len(result.products) == 1
+    assert result.failed_products == []
+    assert result.products[0].product_context["PG_name_resolved"] == "Vehicles / Playsets"

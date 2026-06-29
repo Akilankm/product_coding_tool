@@ -68,6 +68,52 @@ class PGFeatureInputProvider:
                 seen.add(key)
         return out
 
+
+    def resolve_pg_name(self, pg_name: str) -> str:
+        """Resolve batch PG labels to the canonical PG_name present in the feature CSV.
+
+        Example: ``TOY VEHICLES/PLAYSET`` resolves to ``Vehicles / Playsets``.
+        """
+        rows = self._match_rows_for_pg(pg_name)
+        if not rows:
+            available = ", ".join(self.pg_names()[:20])
+            raise PGFeatureInputError(
+                f"No features matched pg_name={pg_name!r}. Available PGs: {available}"
+            )
+        return str(rows[0].get("PG_name") or "").strip()
+
+    def _match_rows_for_pg(self, pg_name: str) -> list[dict[str, Any]]:
+        target_key = _pg_match_key(pg_name)
+        rows = [row for row in self.rows if _pg_match_key(row.get("PG_name")) == target_key]
+        if rows:
+            return rows
+
+        alias_key = _BUILTIN_PG_ALIASES.get(target_key)
+        if alias_key:
+            rows = [row for row in self.rows if _pg_match_key(row.get("PG_name")) == alias_key]
+            if rows:
+                return rows
+
+        # Conservative token-overlap fallback for batch labels that contain extra words
+        # such as "TOY" or use singular/plural forms. Only accept a clear best match.
+        target_tokens = set(target_key.split())
+        best_score = 0.0
+        best_key = ""
+        for candidate in self.pg_names():
+            cand_key = _pg_match_key(candidate)
+            cand_tokens = set(cand_key.split())
+            if not target_tokens or not cand_tokens:
+                continue
+            overlap = len(target_tokens & cand_tokens)
+            union = len(target_tokens | cand_tokens)
+            score = overlap / union if union else 0.0
+            if score > best_score:
+                best_score = score
+                best_key = cand_key
+        if best_score >= 0.75 and best_key:
+            return [row for row in self.rows if _pg_match_key(row.get("PG_name")) == best_key]
+        return []
+
     def filter_rows(
         self,
         *,
@@ -76,8 +122,7 @@ class PGFeatureInputProvider:
     ) -> list[dict[str, Any]]:
         rows = list(self.rows)
         if pg_name:
-            target = _clean_key(pg_name)
-            rows = [row for row in rows if _clean_key(row.get("PG_name")) == target]
+            rows = self._match_rows_for_pg(pg_name)
         elif len(self.pg_names()) > 1:
             raise PGFeatureInputError(
                 "PG feature CSV contains multiple PGs. Provide pg_name. Available PGs: "
@@ -200,6 +245,35 @@ def _split_list(value: Any) -> list[str]:
 
 def _clean_key(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+_BUILTIN_PG_ALIASES = {
+    "vehicle playset": "vehicle playset",
+    "toy vehicle playset": "vehicle playset",
+    "vehicles playset": "vehicle playset",
+    "toy vehicles playset": "vehicle playset",
+    "toy vehicle playsets": "vehicle playset",
+    "toy vehicles playsets": "vehicle playset",
+}
+
+
+def _pg_match_key(value: Any) -> str:
+    raw = str(value or "").lower()
+    tokens = re.findall(r"[a-z0-9]+", raw)
+    normalized: list[str] = []
+    for token in tokens:
+        if token in {"pg", "product", "group", "toy", "toys"}:
+            continue
+        normalized.append(_singularize_token(token))
+    return " ".join(normalized)
+
+
+def _singularize_token(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("s") and not token.endswith(("ss", "ous")):
+        return token[:-1]
+    return token
 
 
 def _normalize_col(name: Any) -> str:

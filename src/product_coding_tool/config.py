@@ -76,16 +76,18 @@ class Config:
     llm_vision_max_images: int = field(default_factory=lambda: _env_int("LLM_VISION_MAX_IMAGES", 8))
     llm_vision_detail: str = field(default_factory=lambda: _env("LLM_VISION_DETAIL", "low"))
 
-    # LLM transport. Default is direct HTTP to avoid brittle notebook/OpenAI-SDK import issues.
-    # Set PCT_LLM_TRANSPORT=openai if you explicitly want the optional SDK path.
-    llm_transport: str = field(default_factory=lambda: _env("LLM_TRANSPORT", "httpx"))
+    # LLM transport. The default intentionally mirrors the working product-scrape-tool:
+    # AzureOpenAI SDK + azure_endpoint + azure_deployment + X-NIQ-CIS-Consumer header.
+    # Direct httpx remains available only as an explicit fallback for custom gateways.
+    llm_transport: str = field(default_factory=lambda: _env("LLM_TRANSPORT", "openai"))
     llm_chat_completions_url: str = field(default_factory=lambda: _env("LLM_CHAT_COMPLETIONS_URL", ""))
+    llm_preflight_enabled: bool = field(default_factory=lambda: _env_bool("LLM_PREFLIGHT_ENABLED", True))
 
     # Azure OpenAI / compatible gateway. Fallback to PCA_* is intentional.
     llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", ""))
     llm_api_version: str = field(default_factory=lambda: _env("LLM_API_VERSION", "2024-10-21"))
     llm_endpoint: str = field(default_factory=lambda: _env("LLM_ENDPOINT", ""))
-    llm_deployment: str = field(default_factory=lambda: _env("LLM_DEPLOYMENT", "gpt-4o"))
+    llm_deployment: str = field(default_factory=lambda: _env("LLM_DEPLOYMENT", ""))
     llm_consumer_id: str = field(default_factory=lambda: _env("LLM_CONSUMER_ID", ""))
     llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 4096))
     llm_temperature: float = field(default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.0))

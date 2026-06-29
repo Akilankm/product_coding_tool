@@ -1,11 +1,9 @@
 """Reusable LLM service for product coding.
 
-Default transport is direct HTTP to the Azure OpenAI / compatible chat-completions
-endpoint. This intentionally avoids importing the OpenAI Python SDK in notebook
-runs, because partially upgraded SDK installs can fail with errors such as
-`ModuleNotFoundError: openai.pagination` before any request is sent.
-
-Set PCT_LLM_TRANSPORT=openai only when you explicitly want the optional SDK path.
+Default transport matches the working product_scrape_tool implementation:
+AzureOpenAI SDK + azure_endpoint + azure_deployment + optional
+X-NIQ-CIS-Consumer gateway header. Direct httpx is retained only as an explicit
+fallback for non-standard gateways.
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ class LLMConfig:
     connect_timeout: float = 15.0
     read_timeout: float = 120.0
     max_retries: int = 4
-    transport: str = "httpx"
+    transport: str = "openai"
     chat_completions_url: str = ""
 
     @classmethod
@@ -53,7 +51,7 @@ class LLMConfig:
             connect_timeout=cfg.llm_connect_timeout,
             read_timeout=cfg.llm_read_timeout,
             max_retries=cfg.llm_max_retries,
-            transport=(cfg.llm_transport or "httpx").strip().lower(),
+            transport=(cfg.llm_transport or "openai").strip().lower(),
             chat_completions_url=cfg.llm_chat_completions_url,
         )
 
@@ -126,9 +124,10 @@ class LLMService:
 
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or LLMConfig.from_global()
-        if not self.config.api_key or not self.config.endpoint:
+        if not self.config.api_key or not self.config.endpoint or not self.config.deployment:
             raise RuntimeError(
-                "LLM is enabled, but PCT/PCA_LLM_API_KEY or PCT/PCA_LLM_ENDPOINT is missing. "
+                "LLM is enabled, but one or more required settings are missing: "
+                "PCT/PCA_LLM_API_KEY, PCT/PCA_LLM_ENDPOINT, PCT/PCA_LLM_DEPLOYMENT. "
                 "Set PCT_LLM_ENABLED=false or PCA_LLM_ENABLED=false to skip LLM synthesis."
             )
         if self.config.transport in {"openai", "sdk", "azureopenai"}:
@@ -142,7 +141,7 @@ class LLMService:
         except Exception as exc:
             raise RuntimeError(
                 "PCT_LLM_TRANSPORT=openai was requested, but the OpenAI SDK is not importable. "
-                "Use the default PCT_LLM_TRANSPORT=httpx, or reinstall the SDK cleanly."
+                "Run `rm -rf .venv && pdm install --prod` so the pinned production dependencies are installed cleanly."
             ) from exc
 
         return AzureOpenAI(
@@ -159,6 +158,28 @@ class LLMService:
                 pool=self.config.read_timeout,
             ),
         )
+
+    def health_check(self) -> None:
+        """Send one tiny request before a batch starts so bad LLM config fails fast.
+
+        This prevents many parallel feature workers from repeatedly calling a bad
+        endpoint/deployment and hiding the root cause in noisy retry logs.
+        """
+        logger.info(
+            "LLM preflight start transport={} endpoint={} deployment={}",
+            self.config.transport,
+            _redact_endpoint(self.config.endpoint),
+            self.config.deployment,
+        )
+        self.predict(
+            "Return exactly: OK",
+            system_prompt="You are a health-check endpoint. Reply with OK.",
+            max_tokens=8,
+            temperature=0.0,
+            response_format=None,
+            purpose="llm_preflight",
+        )
+        logger.info("LLM preflight succeeded")
 
     def predict(
         self,
@@ -275,16 +296,48 @@ class LLMService:
                         response.status_code,
                         response.text[:1500],
                     )
+                    if not _is_retryable_http_status(response.status_code):
+                        response.raise_for_status()
                     response.raise_for_status()
                 data = response.json()
                 return self._response_from_dict(data, purpose=purpose)
-            except Exception as exc:  # noqa: BLE001 - we need retry logging around SDK/gateway exceptions.
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                status = exc.response.status_code if exc.response is not None else 0
+                retryable = _is_retryable_http_status(status)
+                if not retryable or attempt >= max(1, self.config.max_retries):
+                    logger.exception(
+                        "LLM [{}] failed after {} attempt(s); status={} retryable={}",
+                        purpose,
+                        attempt,
+                        status,
+                        retryable,
+                    )
+                    raise
+                sleep_s = min(2**attempt, 8)
+                logger.warning(
+                    "LLM [{}] attempt {}/{} failed: {}. Retrying in {}s",
+                    purpose,
+                    attempt,
+                    self.config.max_retries,
+                    exc,
+                    sleep_s,
+                )
+                time.sleep(sleep_s)
+            except Exception as exc:  # noqa: BLE001 - retry transient SDK/gateway/network exceptions.
                 last_exc = exc
                 if attempt >= max(1, self.config.max_retries):
                     logger.exception("LLM [{}] failed after {} attempt(s)", purpose, attempt)
                     raise
                 sleep_s = min(2**attempt, 8)
-                logger.warning("LLM [{}] attempt {}/{} failed: {}. Retrying in {}s", purpose, attempt, self.config.max_retries, exc, sleep_s)
+                logger.warning(
+                    "LLM [{}] attempt {}/{} failed: {}. Retrying in {}s",
+                    purpose,
+                    attempt,
+                    self.config.max_retries,
+                    exc,
+                    sleep_s,
+                )
                 time.sleep(sleep_s)
         assert last_exc is not None
         raise last_exc
@@ -434,6 +487,16 @@ class LLMService:
             f"prompt={prompt:,} completion={completion:,} "
             f"total={total:,} tokens"
         )
+
+
+def _is_retryable_http_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def _redact_endpoint(endpoint: str) -> str:
+    if not endpoint:
+        return ""
+    return endpoint.split("?")[0].rstrip("/")
 
 
 __all__ = ["LLMConfig", "LLMResponse", "LLMService", "get_llm_service"]
