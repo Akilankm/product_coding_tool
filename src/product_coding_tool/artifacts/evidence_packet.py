@@ -8,16 +8,23 @@ from typing import Iterable
 from ..config import get_config
 from ..log import logger
 from ..models import ArtifactInventory, EvidenceItem, EvidencePacket, EvidencePlan, FeatureRule
+from .context import ProductArtifactContext
 from .locator import ArtifactEvidenceLocator, compact_snippet
 from .navigator import ArtifactNavigator
 from .reader import ArtifactReader
 
 
 class EvidencePacketBuilder:
-    def __init__(self, navigator: ArtifactNavigator, reader: ArtifactReader | None = None) -> None:
+    def __init__(
+        self,
+        navigator: ArtifactNavigator,
+        reader: ArtifactReader | None = None,
+        context: ProductArtifactContext | None = None,
+    ) -> None:
         self.navigator = navigator
         self.reader = reader or ArtifactReader(navigator)
-        self.locator = ArtifactEvidenceLocator(navigator, self.reader)
+        self.context = context
+        self.locator = ArtifactEvidenceLocator(navigator, self.reader, context=context)
         self.cfg = get_config()
 
     def build(self, feature: FeatureRule, inventory: ArtifactInventory, plan: EvidencePlan) -> EvidencePacket:
@@ -29,12 +36,12 @@ class EvidencePacketBuilder:
         for rel in self._expand_files(plan.files_to_read, inventory):
             if rel in files_checked:
                 continue
-            if not self.reader.exists(rel):
+            if not self._exists(rel):
                 missing_files.append(rel)
                 continue
             files_checked.append(rel)
             try:
-                raw_text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
+                raw_text = self._read_artifact_text(rel, max_chars=self.cfg.coding_read_file_chars)
                 text = self._compact_file_text(rel, raw_text, feature, plan)
             except Exception as exc:  # noqa: BLE001 - keep product/feature isolation.
                 missing_files.append(f"{rel} ({exc})")
@@ -49,12 +56,17 @@ class EvidencePacketBuilder:
                     text=text,
                     score=100.0 / max(1, len(files_checked)),
                     strength="strong" if self._strong_source(rel) else "medium",
-                    metadata={"compacted": len(text) < len(raw_text), "raw_chars": len(raw_text), "sent_chars": len(text)},
+                    metadata={
+                        "compacted": len(text) < len(raw_text),
+                        "raw_chars": len(raw_text),
+                        "sent_chars": len(text),
+                        "from_product_context_index": self.context is not None,
+                    },
                 )
             )
             evidence_id += 1
 
-        # Add targeted artifact snippets from all artifact docs.
+        # Add targeted artifact snippets from all artifact docs using the product-level index when present.
         queries = plan.evidence_queries or feature.evidence_terms
         located_items = self.locator.locate_as_evidence(
             queries,
@@ -71,9 +83,9 @@ class EvidencePacketBuilder:
         # Add vision markdown/image manifest when requested or feature rule hints visual need.
         if plan.needs_vision or feature.requires_visual:
             for rel in ["retailer/vision.md", "retailer/manifests/image_manifest.json"]:
-                if self.reader.exists(rel) and rel not in files_checked:
+                if self._exists(rel) and rel not in files_checked:
                     try:
-                        raw_text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
+                        raw_text = self._read_artifact_text(rel, max_chars=self.cfg.coding_read_file_chars)
                         text = self._compact_file_text(rel, raw_text, feature, plan)
                         evidence.append(
                             EvidenceItem(
@@ -83,7 +95,12 @@ class EvidencePacketBuilder:
                                 text=text,
                                 score=25.0,
                                 strength="medium",
-                                metadata={"compacted": len(text) < len(raw_text), "raw_chars": len(raw_text), "sent_chars": len(text)},
+                                metadata={
+                                    "compacted": len(text) < len(raw_text),
+                                    "raw_chars": len(raw_text),
+                                    "sent_chars": len(text),
+                                    "from_product_context_index": self.context is not None,
+                                },
                             )
                         )
                         files_checked.append(rel)
@@ -91,8 +108,8 @@ class EvidencePacketBuilder:
                         missing_files.append(f"{rel} ({exc})")
 
         evidence = self._trim_evidence(evidence)
-        product_context = self.reader.read_product_context()
-        quality_signals = self.reader.read_quality_signals()
+        product_context = self.context.product_context if self.context is not None else self.reader.read_product_context()
+        quality_signals = self.context.quality_signals if self.context is not None else self.reader.read_quality_signals()
 
         if not evidence:
             missing = [f"No artifact evidence found for feature '{feature.feature_name}'."]
@@ -100,13 +117,19 @@ class EvidencePacketBuilder:
             missing = []
 
         total_chars = sum(len(e.text or "") for e in evidence)
+        warning_count = (
+            self.context.artifact_quality_report.get("warning_count", 0)
+            if self.context is not None
+            else self.reader.quality_report().warning_count
+        )
         logger.info(
-            "Evidence packet feature={} evidence_items={} files_checked={} evidence_chars={} artifact_warnings={}",
+            "Evidence packet feature={} evidence_items={} files_checked={} evidence_chars={} artifact_warnings={} context_indexed={}",
             feature.feature_name,
             len(evidence),
             len(files_checked),
             total_chars,
-            self.reader.quality_report().warning_count,
+            warning_count,
+            self.context is not None,
         )
         return EvidencePacket(
             artifact_id=self.navigator.artifact_id,
@@ -132,7 +155,7 @@ class EvidencePacketBuilder:
                 out.extend([p for p in available if fnmatch.fnmatch(p, rel)])
             else:
                 out.append(rel)
-        # Default strong sources even if LLM planner omitted them.
+        # Default strong sources are artifact-contract defaults, not coded values.
         defaults = [
             "retailer/source.md",
             "retailer/tables/*.md",
@@ -154,12 +177,7 @@ class EvidencePacketBuilder:
         return deduped
 
     def _compact_file_text(self, rel: str, text: str, feature: FeatureRule, plan: EvidencePlan) -> str:
-        """Send feature-relevant snippets instead of whole artifact files.
-
-        Full source/metadata files are useful for retrieval, but sending them
-        wholesale to every feature causes 25k-30k-token prompts. This keeps a
-        small header plus matched snippets around feature/allowed-value terms.
-        """
+        """Send feature-relevant snippets instead of whole artifact files."""
         if not text:
             return ""
         hard_cap = max(900, min(self.cfg.coding_read_file_chars, self.cfg.coding_evidence_context_chars * 3))
@@ -180,7 +198,6 @@ class EvidencePacketBuilder:
             if sum(len(s) for s in snippets) >= hard_cap:
                 break
         if len(snippets) == 1:
-            # No term hit. Preserve leading content only.
             return text[:hard_cap].strip() + "\n...[truncated: no feature-specific term hit]"
         compacted = "\n\n".join(snippets)
         if len(compacted) > hard_cap:
@@ -205,6 +222,16 @@ class EvidencePacketBuilder:
             if len(out) >= max_items:
                 break
         return out
+
+    def _exists(self, rel: str) -> bool:
+        if self.context is not None:
+            return rel in self.context.file_texts or self.reader.exists(rel)
+        return self.reader.exists(rel)
+
+    def _read_artifact_text(self, rel: str, *, max_chars: int | None = None) -> str:
+        if self.context is not None and rel in self.context.file_texts:
+            return self.context.read_text(rel, max_chars=max_chars)
+        return self.reader.read_any_as_text(rel, max_chars=max_chars)
 
     @staticmethod
     def _strong_source(rel: str) -> bool:

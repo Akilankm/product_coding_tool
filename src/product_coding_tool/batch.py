@@ -9,10 +9,13 @@ This module wires the three runtime inputs together:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from .agent.orchestrator import ProductCodingAgent
+from .artifacts.navigator import ArtifactNavigator
+from .config import get_config
 from .inputs.product_batch import ProductBatchInputProvider
 from .log import logger
 from .models import (
@@ -25,21 +28,31 @@ from .models import (
 )
 from .outputs.writer import ProductBatchResultWriter
 from .rules.pg_input import PGFeatureInputProvider
-from .config import get_config
 from .services.llm import get_llm_service
+
+
+@dataclass(frozen=True)
+class ProductPreflightRecord:
+    row: ProductInputRow
+    artifact_dir: Path
+    resolved_pg_name: str
+    feature_count: int
+    missing_expected_files: list[str]
+    artifact_file_count: int
 
 
 class ProductBatchCodingAgent:
     """Run the product coding agent across many scrape artifact folders.
 
-    Product-level execution is intentionally sequential by default. Feature-level
-    execution inside each product remains parallel through `max_parallel_features`.
-    This prevents uncontrolled LLM fan-out while still accelerating the expensive
-    feature coding step for each product.
+    Product-level execution is bounded by `max_parallel_products`. Feature-level
+    execution inside each product remains bounded by `max_parallel_features`.
+    The LLM service also has a global semaphore, so total gateway fan-out stays
+    controlled even when product and feature parallelism are both enabled.
     """
 
     def __init__(self, product_agent: ProductCodingAgent | None = None) -> None:
         self.product_agent = product_agent or ProductCodingAgent()
+        self.cfg = get_config()
 
     def run(self, request: ProductBatchCodingRequest) -> ProductBatchCodingResult:
         product_provider = ProductBatchInputProvider.from_file(request.batch_input_csv)
@@ -63,50 +76,40 @@ class ProductBatchCodingAgent:
             logger.info("All product batch PG_name values resolved to canonical PG names")
         self._preflight_llm_if_needed(request)
 
-        products: list[BatchCodingResult] = []
-        failed: list[FailedProductCodingResult] = []
         output_root = request.output_dir or _default_batch_output_dir()
         output_root.mkdir(parents=True, exist_ok=True)
 
-        for row in rows:
-            artifact_dir = request.scraped_root / row.input_id
-            try:
-                resolved_pg_name = pg_provider.resolve_pg_name(row.pg_name)
-                features = pg_provider.features_for_pg(pg_name=resolved_pg_name, limit=request.limit_features)
-                if not artifact_dir.exists():
-                    raise FileNotFoundError(
-                        f"Scrape artifact folder not found for input_id={row.input_id}: {artifact_dir}"
-                    )
-                logger.info(
-                    "Coding product input_id={} pg_name={} resolved_pg_name={} artifact={} features={}",
-                    row.input_id,
-                    row.pg_name,
-                    resolved_pg_name,
-                    artifact_dir,
-                    len(features),
-                )
-                product_context = dict(row.fields)
-                # Make product output use the same canonical PG_name as the feature CSV.
-                # Keep the original batch label separately for audit/debugging.
-                product_context["PG_name_original"] = row.pg_name
-                product_context["PG_name_resolved"] = resolved_pg_name
-                product_context["PG_name"] = resolved_pg_name
-                product_result = self.product_agent.run(
-                    CodingRequest(
-                        artifact_dir=artifact_dir,
-                        features=features,
-                        output_dir=output_root / row.input_id,
-                        product_id=row.input_id,
-                        product_context=product_context,
-                        max_iterations=request.max_iterations,
-                        max_parallel_features=request.max_parallel_features,
-                    )
-                )
-                products.append(product_result)
-            except Exception as exc:  # product-level isolation
-                logger.exception("Product-level coding failed input_id={} pg_name={}", row.input_id, row.pg_name)
-                failed.append(_failed(row, artifact_dir, exc))
+        preflight_records, preflight_failures = self._preflight_products(request, pg_provider, rows)
+        max_parallel_products = self._resolve_max_parallel_products(request, len(preflight_records))
+        logger.info(
+            "Batch execution plan products={} preflight_failures={} max_parallel_products={} max_parallel_features={} global_llm_concurrency={}",
+            len(preflight_records),
+            len(preflight_failures),
+            max_parallel_products,
+            request.max_parallel_features or self.cfg.coding_max_parallel_features,
+            self.cfg.coding_global_llm_concurrency,
+        )
 
+        if max_parallel_products <= 1 or len(preflight_records) <= 1:
+            products = []
+            failed = list(preflight_failures)
+            for record in preflight_records:
+                product_result, failure = self._code_one_product(record, request=request, output_root=output_root)
+                if product_result is not None:
+                    products.append(product_result)
+                if failure is not None:
+                    failed.append(failure)
+        else:
+            products, runtime_failures = self._run_products_parallel(
+                preflight_records,
+                request=request,
+                output_root=output_root,
+                max_parallel_products=max_parallel_products,
+            )
+            failed = [*preflight_failures, *runtime_failures]
+
+        products.sort(key=lambda p: int((p.product_context or {}).get("batch_row_order") or 0))
+        failed.sort(key=lambda f: int((f.product_context or {}).get("batch_row_order") or 0))
         artifact_quality_reports = [p.artifact_quality_report for p in products if p.artifact_quality_report]
         result = ProductBatchCodingResult(
             products=products,
@@ -122,6 +125,130 @@ class ProductBatchCodingAgent:
             output_root,
         )
         return result
+
+    def _preflight_products(
+        self,
+        request: ProductBatchCodingRequest,
+        pg_provider: PGFeatureInputProvider,
+        rows: list[ProductInputRow],
+    ) -> tuple[list[ProductPreflightRecord], list[FailedProductCodingResult]]:
+        records: list[ProductPreflightRecord] = []
+        failed: list[FailedProductCodingResult] = []
+        for row in rows:
+            artifact_dir = request.scraped_root / row.input_id
+            try:
+                resolved_pg_name = pg_provider.resolve_pg_name(row.pg_name)
+                features = pg_provider.features_for_pg(pg_name=resolved_pg_name, limit=request.limit_features)
+                if not artifact_dir.exists():
+                    raise FileNotFoundError(f"Scrape artifact folder not found for input_id={row.input_id}: {artifact_dir}")
+                missing_expected: list[str] = []
+                artifact_file_count = 0
+                if self.cfg.coding_preflight_artifacts_enabled:
+                    inventory = ArtifactNavigator(artifact_dir).inventory()
+                    missing_expected = list(inventory.missing_expected_files)
+                    artifact_file_count = len(inventory.files)
+                    if missing_expected:
+                        logger.warning(
+                            "Product artifact preflight warnings input_id={} missing_expected_files={}",
+                            row.input_id,
+                            missing_expected,
+                        )
+                records.append(
+                    ProductPreflightRecord(
+                        row=row,
+                        artifact_dir=artifact_dir,
+                        resolved_pg_name=resolved_pg_name,
+                        feature_count=len(features),
+                        missing_expected_files=missing_expected,
+                        artifact_file_count=artifact_file_count,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - keep batch preflight isolated.
+                logger.exception("Product preflight failed input_id={} pg_name={}", row.input_id, row.pg_name)
+                failed.append(_failed(row, artifact_dir, exc))
+        logger.info("Product preflight complete runnable={} failed={}", len(records), len(failed))
+        return records, failed
+
+    def _run_products_parallel(
+        self,
+        records: list[ProductPreflightRecord],
+        *,
+        request: ProductBatchCodingRequest,
+        output_root: Path,
+        max_parallel_products: int,
+    ) -> tuple[list[BatchCodingResult], list[FailedProductCodingResult]]:
+        products: list[BatchCodingResult] = []
+        failed: list[FailedProductCodingResult] = []
+        with ThreadPoolExecutor(max_workers=max_parallel_products, thread_name_prefix="product_worker") as executor:
+            future_to_record = {
+                executor.submit(self._code_one_product, record, request=request, output_root=output_root): record
+                for record in records
+            }
+            for future in as_completed(future_to_record):
+                record = future_to_record[future]
+                try:
+                    product_result, failure = future.result()
+                except Exception as exc:  # noqa: BLE001 - product-level isolation.
+                    logger.exception("Product worker crashed input_id={} pg_name={}", record.row.input_id, record.row.pg_name)
+                    product_result, failure = None, _failed(record.row, record.artifact_dir, exc)
+                if product_result is not None:
+                    products.append(product_result)
+                if failure is not None:
+                    failed.append(failure)
+        return products, failed
+
+    def _code_one_product(
+        self,
+        record: ProductPreflightRecord,
+        *,
+        request: ProductBatchCodingRequest,
+        output_root: Path,
+    ) -> tuple[BatchCodingResult | None, FailedProductCodingResult | None]:
+        row = record.row
+        try:
+            pg_provider = PGFeatureInputProvider.from_file(request.pg_feature_input_csv)
+            features = pg_provider.features_for_pg(pg_name=record.resolved_pg_name, limit=request.limit_features)
+            logger.info(
+                "Coding product input_id={} pg_name={} resolved_pg_name={} artifact={} features={} artifact_files={} missing_expected={}",
+                row.input_id,
+                row.pg_name,
+                record.resolved_pg_name,
+                record.artifact_dir,
+                len(features),
+                record.artifact_file_count,
+                len(record.missing_expected_files),
+            )
+            product_context = dict(row.fields)
+            product_context["PG_name_original"] = row.pg_name
+            product_context["PG_name_resolved"] = record.resolved_pg_name
+            product_context["PG_name"] = record.resolved_pg_name
+            product_context["artifact_missing_expected_files"] = "; ".join(record.missing_expected_files)
+            product_context["artifact_file_count"] = record.artifact_file_count
+            product_context["batch_row_order"] = row.row_order
+            # Use a fresh product agent for each product. This keeps product-level parallelism
+            # isolated while the shared LLM singleton still enforces global concurrency.
+            agent = ProductCodingAgent()
+            product_result = agent.run(
+                CodingRequest(
+                    artifact_dir=record.artifact_dir,
+                    features=features,
+                    output_dir=output_root / row.input_id,
+                    product_id=row.input_id,
+                    product_context=product_context,
+                    max_iterations=request.max_iterations,
+                    max_parallel_features=request.max_parallel_features,
+                )
+            )
+            return product_result, None
+        except Exception as exc:  # product-level isolation
+            logger.exception("Product-level coding failed input_id={} pg_name={}", row.input_id, row.pg_name)
+            return None, _failed(row, record.artifact_dir, exc)
+
+    def _resolve_max_parallel_products(self, request: ProductBatchCodingRequest, row_count: int) -> int:
+        requested = request.max_parallel_products
+        if requested is None:
+            requested = self.cfg.coding_max_parallel_products
+        return max(1, min(int(requested), max(1, row_count)))
 
     def _preflight_llm_if_needed(self, request: ProductBatchCodingRequest) -> None:
         cfg = get_config()
@@ -142,13 +269,15 @@ class ProductBatchCodingAgent:
 
 
 def _failed(row: ProductInputRow, artifact_dir: Path, exc: Exception) -> FailedProductCodingResult:
+    context = dict(row.fields or {})
+    context["batch_row_order"] = row.row_order
     return FailedProductCodingResult(
         input_id=row.input_id,
         pg_name=row.pg_name,
         artifact_dir=artifact_dir,
         error=str(exc),
         error_type=type(exc).__name__,
-        product_context=row.fields,
+        product_context=context,
     )
 
 

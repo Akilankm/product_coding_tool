@@ -93,7 +93,7 @@ class CodingRequest(BaseModel):
     output_dir: Path | None = None
     product_id: str = ""
     product_context: dict[str, Any] = Field(default_factory=dict)
-    max_iterations: int = 2
+    max_iterations: int = 1
     max_parallel_features: int | None = None
 
     @model_validator(mode="after")
@@ -242,8 +242,9 @@ class ProductBatchCodingRequest(BaseModel):
     input_ids: list[str] | None = None
     limit_products: int | None = None
     limit_features: int | None = None
-    max_iterations: int = 2
+    max_iterations: int = 1
     max_parallel_features: int | None = None
+    max_parallel_products: int | None = None
     llm_preflight: bool | None = None
 
     @model_validator(mode="after")
@@ -256,6 +257,8 @@ class ProductBatchCodingRequest(BaseModel):
             raise ValueError(f"pg_feature_input_csv does not exist: {self.pg_feature_input_csv}")
         if self.max_parallel_features is not None and self.max_parallel_features < 1:
             raise ValueError("max_parallel_features must be >= 1 when provided")
+        if self.max_parallel_products is not None and self.max_parallel_products < 1:
+            raise ValueError("max_parallel_products must be >= 1 when provided")
         return self
 
 
