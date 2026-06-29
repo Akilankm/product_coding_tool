@@ -39,12 +39,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--feature-name", action="append", help="Optional feature filter in single-product mode. Can repeat.")
     parser.add_argument("--limit-features", type=int, help="Optional limit after PG filtering; useful for smoke tests.")
     parser.add_argument("--output-dir", help="Output directory/root.")
-    parser.add_argument("--max-iterations", type=int, default=2, help="Maximum evidence/coding loop iterations per feature.")
+    parser.add_argument("--max-iterations", type=int, default=1, help="Maximum evidence/coding loop iterations per feature.")
     parser.add_argument(
         "--max-parallel-features",
         type=int,
         default=None,
         help="Maximum features to code concurrently per product. Defaults to PCT/PCA_CODING_MAX_PARALLEL_FEATURES.",
+    )
+    parser.add_argument(
+        "--max-parallel-products",
+        type=int,
+        default=None,
+        help="Maximum products to code concurrently in batch mode. Defaults to PCT/PCA_CODING_MAX_PARALLEL_PRODUCTS.",
     )
     parser.add_argument(
         "--skip-llm-preflight",
@@ -81,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
             limit_features=args.limit_features,
             max_iterations=max(1, args.max_iterations),
             max_parallel_features=args.max_parallel_features,
+            max_parallel_products=args.max_parallel_products,
             llm_preflight=not args.skip_llm_preflight,
         )
         result = ProductBatchCodingAgent().run(request)
