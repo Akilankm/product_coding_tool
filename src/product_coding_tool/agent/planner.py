@@ -18,7 +18,24 @@ class EvidencePlanner:
         self.cfg = get_config()
 
     def plan(self, feature: FeatureRule, inventory: ArtifactInventory) -> EvidencePlan:
-        if not self.cfg.llm_enabled:
+        mode = (self.cfg.coding_planner_mode or "deterministic").strip().lower()
+        if not self.cfg.llm_enabled or mode in {"deterministic", "static", "rule", "rules"}:
+            plan = self._fallback_plan(feature)
+            logger.debug("Evidence planner used deterministic mode for feature={} mode={}", feature.feature_name, mode)
+            return plan.model_copy(
+                update={
+                    "reason": (
+                        f"Deterministic evidence plan used; coding_planner_mode={mode}. "
+                        "This avoids one LLM planner call per feature and uses default strong artifact sources plus feature terms."
+                    )
+                }
+            )
+        if mode not in {"llm", "auto"}:
+            logger.warning(
+                "Unknown PCT_CODING_PLANNER_MODE={!r}; using deterministic evidence planning for feature={}",
+                mode,
+                feature.feature_name,
+            )
             return self._fallback_plan(feature)
         payload = {
             "feature": feature.model_dump(),
