@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .agent.orchestrator import ProductCodingAgent
+from .agent.product_level import ProductLevelCodingAgent
 from .batch import ProductBatchCodingAgent
 from .inputs.product_batch import ProductBatchInputProvider
 from .rules.pg_input import PGFeatureInputProvider
@@ -20,7 +21,7 @@ from .models import (
     ProductInputRow,
 )
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 __all__ = [
     "BatchCodingResult",
@@ -37,5 +38,6 @@ __all__ = [
     "ProductBatchCodingResult",
     "ProductBatchInputProvider",
     "ProductCodingAgent",
+    "ProductLevelCodingAgent",
     "ProductInputRow",
 ]
