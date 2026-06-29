@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from ..config import get_config
 from ..models import ArtifactInventory, EvidenceItem
+from .context import ProductArtifactContext
 from .contract import priority_for
 from .navigator import ArtifactNavigator
 from .reader import ArtifactReader
@@ -54,12 +54,20 @@ def compact_snippet(text: str, terms: list[str], *, context_chars: int) -> str:
 
 
 class ArtifactEvidenceLocator:
-    def __init__(self, navigator: ArtifactNavigator, reader: ArtifactReader | None = None) -> None:
+    def __init__(
+        self,
+        navigator: ArtifactNavigator,
+        reader: ArtifactReader | None = None,
+        context: ProductArtifactContext | None = None,
+    ) -> None:
         self.navigator = navigator
         self.reader = reader or ArtifactReader(navigator)
+        self.context = context
         self.cfg = get_config()
 
     def locatable_files(self, inventory: ArtifactInventory | None = None) -> list[str]:
+        if self.context is not None:
+            return list(self.context.locatable_files)
         inv = inventory or self.navigator.inventory()
         allowed_types = {"markdown", "json"}
         files = [f for f in inv.files if f.file_type in allowed_types]
@@ -90,7 +98,7 @@ class ArtifactEvidenceLocator:
         hits: list[LocatorHit] = []
         for rel in self.locatable_files(inventory):
             try:
-                text = self.reader.read_any_as_text(rel, max_chars=max_file_chars)
+                text = self._read_text(rel, max_chars=max_file_chars)
             except Exception:
                 continue
             lowered = text.lower()
@@ -130,10 +138,15 @@ class ArtifactEvidenceLocator:
                     text=hit.snippet,
                     score=hit.score,
                     strength=strength,  # type: ignore[arg-type]
-                    metadata={"match_terms": list(hit.match_terms)},
+                    metadata={"match_terms": list(hit.match_terms), "from_product_context_index": self.context is not None},
                 )
             )
         return items
+
+    def _read_text(self, relative_path: str, *, max_chars: int | None = None) -> str:
+        if self.context is not None:
+            return self.context.read_text(relative_path, max_chars=max_chars)
+        return self.reader.read_any_as_text(relative_path, max_chars=max_chars)
 
 
 __all__ = ["ArtifactEvidenceLocator", "LocatorHit", "tokenize"]
