@@ -29,6 +29,13 @@ class FeatureRule(BaseModel):
     evidence_hints: list[str] = Field(default_factory=list)
     requires_visual: bool = False
     missing_value: str = "Not stated"
+    pg_name: str = ""
+    pg_no: str = ""
+    rulebook_pdf: str = ""
+    feature_order: int | None = None
+    feature_section: str = ""
+    source_page: int | None = None
+    classification_reason: str = ""
 
     @field_validator("feature_id", "feature_name")
     @classmethod
@@ -52,8 +59,9 @@ class FeatureRule(BaseModel):
 
     @model_validator(mode="after")
     def validate_closed_set(self) -> "FeatureRule":
-        if self.feature_type == "closed_set" and not self.allowed_values:
-            raise ValueError("closed_set features require allowed_values")
+        # Closed-set features can arrive from the PG input file without allowed_values.
+        # In that case the coding agent can still collect evidence and propose a value,
+        # but RuleValidator will mark the result as needing manual rulebook validation.
         return self
 
     @property
@@ -84,6 +92,7 @@ class CodingRequest(BaseModel):
     features: list[FeatureRule]
     output_dir: Path | None = None
     product_id: str = ""
+    product_context: dict[str, Any] = Field(default_factory=dict)
     max_iterations: int = 3
     max_parallel_features: int | None = None
 
@@ -205,6 +214,70 @@ class BatchCodingResult(BaseModel):
     artifact_dir: Path
     results: list[FeatureCodingResult]
     output_dir: Path | None = None
+    product_id: str = ""
+    product_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductInputRow(BaseModel):
+    """One row from the product batch input CSV."""
+
+    model_config = _DTO_CONFIG
+
+    input_id: str
+    pg_name: str
+    row_order: int
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductBatchCodingRequest(BaseModel):
+    """Runtime request for coding many product artifacts from a product batch CSV."""
+
+    model_config = _DTO_CONFIG
+
+    batch_input_csv: Path
+    scraped_root: Path
+    pg_feature_input_csv: Path
+    output_dir: Path | None = None
+    input_ids: list[str] | None = None
+    limit_products: int | None = None
+    limit_features: int | None = None
+    max_iterations: int = 3
+    max_parallel_features: int | None = None
+
+    @model_validator(mode="after")
+    def validate_batch_request(self) -> "ProductBatchCodingRequest":
+        if not self.batch_input_csv.exists():
+            raise ValueError(f"batch_input_csv does not exist: {self.batch_input_csv}")
+        if not self.scraped_root.exists():
+            raise ValueError(f"scraped_root does not exist: {self.scraped_root}")
+        if not self.pg_feature_input_csv.exists():
+            raise ValueError(f"pg_feature_input_csv does not exist: {self.pg_feature_input_csv}")
+        if self.max_parallel_features is not None and self.max_parallel_features < 1:
+            raise ValueError("max_parallel_features must be >= 1 when provided")
+        return self
+
+
+class FailedProductCodingResult(BaseModel):
+    """A product-level failure that occurred before feature coding could complete."""
+
+    model_config = _DTO_CONFIG
+
+    input_id: str
+    pg_name: str = ""
+    artifact_dir: Path | None = None
+    error: str
+    error_type: str = ""
+    product_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductBatchCodingResult(BaseModel):
+    """Output of coding multiple product artifacts from a product batch CSV."""
+
+    model_config = _DTO_CONFIG
+
+    products: list[BatchCodingResult] = Field(default_factory=list)
+    failed_products: list[FailedProductCodingResult] = Field(default_factory=list)
+    output_dir: Path | None = None
 
 
 __all__ = [
@@ -218,4 +291,8 @@ __all__ = [
     "EvidencePlan",
     "FeatureCodingResult",
     "FeatureRule",
+    "ProductInputRow",
+    "ProductBatchCodingRequest",
+    "ProductBatchCodingResult",
+    "FailedProductCodingResult",
 ]

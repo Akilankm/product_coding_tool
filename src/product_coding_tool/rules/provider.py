@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..models import FeatureRule
+from .pg_input import PGFeatureInputProvider
 
 
 class FeatureRuleProvider:
@@ -71,6 +72,24 @@ class FeatureRuleProvider:
                     )
                 )
         return cls(rules)
+
+    @classmethod
+    def from_pg_input(
+        cls,
+        path: str | Path,
+        *,
+        pg_name: str | None = None,
+        feature_names: Iterable[str] | None = None,
+        limit: int | None = None,
+    ) -> "FeatureRuleProvider":
+        provider = PGFeatureInputProvider.from_file(path)
+        return cls(
+            provider.features_for_pg(
+                pg_name=pg_name,
+                feature_names=feature_names,
+                limit=limit,
+            )
+        )
 
 
 def _split_list(value: str) -> list[str]:

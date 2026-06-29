@@ -70,11 +70,16 @@ class ProductCodingAgent:
                 max_workers=max_workers,
             )
 
+        product_id = request.product_id or str(request.product_context.get("input_id") or inventory.artifact_id)
+        self._apply_request_metadata(results, request=request, product_id=product_id)
+
         out = BatchCodingResult(
             artifact_id=inventory.artifact_id,
             artifact_dir=navigator.artifact_root,
             results=results,
             output_dir=request.output_dir,
+            product_id=product_id,
+            product_context=request.product_context,
         )
         writer = ResultWriter()
         writer.write(out, output_dir=request.output_dir)
@@ -130,6 +135,7 @@ class ProductCodingAgent:
             result.audit["parallel_safe"] = True
             result.audit["worker_thread"] = worker_thread
             result.audit["worker_pool"] = "feature_worker_pool"
+            result.audit.update(_feature_audit_metadata(feature))
             if not self.review_gate.should_collect_more(feature, packet, result, iteration=iteration, max_iterations=max_iterations):
                 return result
             iteration += 1
@@ -141,6 +147,35 @@ class ProductCodingAgent:
                     "reason": f"Follow-up evidence collection after review gate: {result.missing_evidence or result.conflicts}",
                 }
             )
+
+
+    @staticmethod
+    def _apply_request_metadata(
+        results: list[FeatureCodingResult],
+        *,
+        request: CodingRequest,
+        product_id: str,
+    ) -> None:
+        context = dict(request.product_context or {})
+        context.setdefault("input_id", product_id)
+        for result in results:
+            result.audit.setdefault("input_id", product_id)
+            result.audit.setdefault("product_context", context)
+            # Keep frequently used product input fields top-level in audit for CSV/reporting.
+            for key in (
+                "product_url",
+                "main_text",
+                "ean",
+                "retailer_name",
+                "country_code",
+                "requested_retailer_name",
+                "requested_country_code",
+                "best_url_present",
+                "categorical_decision",
+                "source_row",
+            ):
+                if key in context:
+                    result.audit.setdefault(key, context.get(key))
 
     @staticmethod
     def _crash_result(feature: FeatureRule, artifact_id: str, exc: Exception) -> FeatureCodingResult:
@@ -159,6 +194,7 @@ class ProductCodingAgent:
             conflicts=[],
             missing_evidence=["Feature-level worker crashed before a supported coded value could be produced."],
             audit={
+                **_feature_audit_metadata(feature),
                 "worker_crash": True,
                 "exception_type": type(exc).__name__,
                 "exception": str(exc),
@@ -166,6 +202,19 @@ class ProductCodingAgent:
                 "worker_pool": "feature_worker_pool",
             },
         )
+
+
+def _feature_audit_metadata(feature: FeatureRule) -> dict[str, Any]:
+    return {
+        "pg_name": feature.pg_name,
+        "pg_no": feature.pg_no,
+        "rulebook_pdf": feature.rulebook_pdf,
+        "feature_order": feature.feature_order,
+        "feature_section": feature.feature_section,
+        "source_page": feature.source_page,
+        "classification_reason": feature.classification_reason,
+        "allowed_values": feature.allowed_values,
+    }
 
 
 def _dedupe(values: list[str]) -> list[str]:

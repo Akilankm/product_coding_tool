@@ -29,18 +29,28 @@ class RuleValidator:
             manual_review = True
 
         if feature.feature_type == "closed_set" and value:
-            allowed_by_norm = {normalize_value(v): v for v in feature.allowed_values}
-            norm = normalize_value(value)
-            if norm in allowed_by_norm:
-                value = allowed_by_norm[norm]
-                validation_status = "valid" if result.evidence and not conflicts else "needs_review"
+            if feature.allowed_values:
+                allowed_by_norm = {normalize_value(v): v for v in feature.allowed_values}
+                norm = normalize_value(value)
+                if norm in allowed_by_norm:
+                    value = allowed_by_norm[norm]
+                    validation_status = "valid" if result.evidence and not conflicts else "needs_review"
+                else:
+                    validation_status = "invalid"
+                    identity_status = "unsupported"
+                    manual_review = True
+                    conflicts.append(
+                        f"Closed-set value '{result.coded_value}' is not in allowed_values: {feature.allowed_values}"
+                    )
             else:
-                validation_status = "invalid"
-                identity_status = "unsupported"
+                # The PG input can mark a feature as closed_set without shipping the
+                # full allowed-value list. Do not reject the coded value; keep it
+                # as evidence-backed but require manual/rulebook validation.
+                validation_status = "needs_review"
                 manual_review = True
-                conflicts.append(
-                    f"Closed-set value '{result.coded_value}' is not in allowed_values: {feature.allowed_values}"
-                )
+                msg = "Closed-set feature has no allowed_values in the PG feature input; validate against the rulebook allowed list."
+                if msg not in missing:
+                    missing.append(msg)
         elif feature.feature_type == "open_set" and value:
             validation_status = "valid" if result.evidence and not conflicts else "needs_review"
 

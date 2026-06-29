@@ -1,7 +1,7 @@
 [project]
 name = "product-coding-tool"
-version = "1.2.6"
-description = "Standalone artifact-grounded, loop-engineered product feature coding agent with explicit feature-worker pool parallelism and notebook-ready PDM production install. No web search, scraping runtime, or mandatory OpenAI SDK."
+version = "1.2.9"
+description = "Standalone artifact-grounded product feature coding agent with batch product input CSV + scrape artifact root + canonical 5-column PG feature CSV input, explicit feature-worker pool parallelism, and notebook-ready PDM production install."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "Proprietary" }

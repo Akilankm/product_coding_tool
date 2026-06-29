@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 from .agent.orchestrator import ProductCodingAgent
+from .batch import ProductBatchCodingAgent
+from .inputs.product_batch import ProductBatchInputProvider
+from .rules.pg_input import PGFeatureInputProvider
 from .models import (
     BatchCodingResult,
     CodingRequest,
     EvidenceItem,
     EvidencePacket,
     EvidencePlan,
+    FailedProductCodingResult,
     FeatureCodingResult,
     FeatureRule,
+    ProductBatchCodingRequest,
+    ProductBatchCodingResult,
+    ProductInputRow,
 )
 
-__version__ = "1.2.5"
+__version__ = "1.2.9"
 
 __all__ = [
     "BatchCodingResult",
@@ -21,7 +28,14 @@ __all__ = [
     "EvidenceItem",
     "EvidencePacket",
     "EvidencePlan",
+    "FailedProductCodingResult",
     "FeatureCodingResult",
     "FeatureRule",
+    "PGFeatureInputProvider",
+    "ProductBatchCodingAgent",
+    "ProductBatchCodingRequest",
+    "ProductBatchCodingResult",
+    "ProductBatchInputProvider",
     "ProductCodingAgent",
+    "ProductInputRow",
 ]

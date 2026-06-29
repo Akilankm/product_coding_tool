@@ -2,240 +2,182 @@
 
 Standalone artifact-grounded product feature coding agent.
 
-This package has one responsibility:
+## Runtime inputs
+
+The product coding runtime now takes exactly these three inputs:
 
 ```text
-existing scrape artifact folder + features to code -> coded feature values with evidence, confidence, and audit
+data/scraped/
+  ROW_0001/
+  ROW_0002/
+  ...
+
+product_batch_input_with_pg_name.csv
+pg_feature_coding_input.csv
 ```
 
-It intentionally contains **no URL discovery**, **no web search**, **no SerpAPI**, **no Crawl4AI**, and **no scraping pipeline**. The scrape artifact is treated as a completed upstream input.
+### 1. Product batch input CSV
 
-## Runtime loop
+Must contain at least:
+
+```csv
+input_id,PG_name
+```
+
+All other columns are preserved as product context and copied into output/audit.
+
+`input_id` must match the scrape artifact folder name:
 
 ```text
-FeatureRule list
-  -> artifact inventory once
-  -> feature-level parallel workers
-  -> each worker runs: LLM evidence plan -> local artifact evidence reader/locator -> evidence packet -> LLM feature coder -> rule validator + review gate -> optional follow-up evidence loop
-  -> ordered final coded output
+input_id=ROW_0001  ->  data/scraped/ROW_0001
 ```
 
-Feature-level parallelism is enabled by default. Each feature is independent over the same immutable scrape artifact, so the agent can code multiple features concurrently while preserving the input order in `coded_features.json` and `coded_features.csv`.
-
-Control concurrency with:
-
-```bash
-PCT_CODING_MAX_PARALLEL_FEATURES=4
-```
-
-or at runtime:
-
-```bash
-product-code ... --max-parallel-features 4
-```
-
-Use `--max-parallel-features 1` for fully sequential debugging.
-
-## Inputs
-
-- `artifact_dir`: path to one completed product scrape artifact root, for example `data/scraped/scrape_.../`
-- `features`: JSON/CSV feature rules to code
-
-Expected artifact shape:
+Typical columns:
 
 ```text
-scrape_.../
-├── request.json
-├── scrape_result.json
-└── retailer/
-    ├── product_evidence.json
-    ├── product_evidence.md
-    ├── claims.md
-    ├── source.md
-    ├── vision.md
-    ├── metadata.json
-    ├── quality_report.json
-    ├── noise_report.json
-    ├── evidence_recovery_report.json
-    ├── tables/*.md
-    ├── images/*
-    └── manifests/*.json
+input_id, product_url, main_text, PG_name, ean, retailer_name, country_code, ...
 ```
 
-## Outputs
+### 2. Scrape artifact root
 
-- `coded_features.json`
-- `coded_features.csv`
-- `coding_audit.md`
-- `agent_trace.json`
+Folder containing one artifact folder per `input_id`:
 
-## PDM setup
+```text
+data/scraped/
+├── ROW_0001/
+│   ├── retailer/
+│   │   ├── product_evidence.json
+│   │   ├── claims.md
+│   │   ├── source.md
+│   │   ├── vision.md
+│   │   └── ...
+│   ├── request.json
+│   └── scrape_result.json
+└── ROW_0002/
+```
 
-This repo uses `pyproject.toml` as the single dependency source of truth. There are no `requirements.txt` files.
+### 3. PG feature coding input CSV
 
-For the notebook-first AzureML/VS Code workflow, run:
+Exactly 5 columns:
+
+```csv
+PG_name,features,type,allowed_values,description
+```
+
+- `type` must be `open_set` or `closed_set`
+- `allowed_values` is semicolon-separated and required for `closed_set`
+- `allowed_values` is blank for `open_set`
+
+## Execution model
+
+For each row in the product batch CSV:
+
+```text
+input_id -> locate scrape artifact folder
+PG_name  -> select features from pg_feature_coding_input.csv
+feature list -> run ProductCodingAgent
+```
+
+Inside each product, feature coding is parallelized:
+
+```text
+4 workers + 8 features
+  worker_1 -> feature_1 -> next available feature
+  worker_2 -> feature_2 -> next available feature
+  worker_3 -> feature_3 -> next available feature
+  worker_4 -> feature_4 -> next available feature
+```
+
+Each feature worker performs its own sequential agent loop:
+
+```text
+plan evidence -> collect artifact evidence -> code value -> review gate -> retry if needed
+```
+
+## Install
 
 ```bash
 pdm install --prod
 ```
 
-That installs runtime + notebook/kernel dependencies from `[project.dependencies]` and then runs the PDM `post_install` hook to register the Jupyter kernel automatically.
+This installs notebook/runtime dependencies and registers the kernel.
 
-Use the installed kernel in VS Code / AzureML notebooks:
-
-```text
-Product Coding Tool (PDM)
-```
-
-The kernel installer writes:
-
-```text
-.ipython/profile_default/ipython_config.py
-```
-
-with:
-
-```python
-c.Completer.use_jedi = False
-```
-
-This avoids the slow/hanging Jedi autocomplete path in heavy AzureML/Jupyter environments.
-
-## Non-PDM setup
-
-PDM is the supported path for this project. If you must use pip, install directly from `pyproject.toml` and then register the kernel manually:
-
-```bash
-python -m pip install -e .
-python scripts/install_ipykernel.py
-```
-
-## Run from CLI
-
-```bash
-python scripts/run_product_coding.py \
-  --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
-  --features-json examples/features.json \
-  --output-dir data/coded/demo \
-  --max-parallel-features 4
-```
-
-Or, after install:
+## Batch CLI
 
 ```bash
 product-code \
-  --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
-  --features-json examples/features.json \
-  --output-dir data/coded/demo \
+  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --scraped-root data/scraped \
+  --pg-feature-input examples/pg_feature_coding_input.csv \
+  --output-dir data/coded/batch_run \
   --max-parallel-features 4
 ```
 
-## LLM config
-
-The package includes a standalone LLM wrapper in `product_coding_tool.services.llm`. Use `PCT_LLM_*` variables. It also accepts existing `PCA_LLM_*` variables as fallback so existing secret injection keeps working.
-
-Set `PCT_LLM_ENABLED=false` for dry contract tests; the deterministic fallback will not invent values.
-
-```env
-PCT_LLM_ENABLED=true
-PCT_LLM_API_KEY=
-PCT_LLM_API_VERSION=2024-10-21
-PCT_LLM_ENDPOINT=
-PCT_LLM_DEPLOYMENT=gpt-4o
-PCT_LLM_CONSUMER_ID=
-```
-
-## Test
-
-Test/dev dependencies are intentionally not installed by `pdm install --prod`. For tests, run:
+Smoke test:
 
 ```bash
-pdm install -G test
-pdm run test
+product-code \
+  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --scraped-root data/scraped \
+  --pg-feature-input examples/pg_feature_coding_input.csv \
+  --output-dir data/coded/smoke \
+  --limit-products 2 \
+  --limit-features 3 \
+  --max-parallel-features 4
 ```
 
-or, if pytest is already available:
+Run specific rows:
 
 ```bash
-python -m pytest -q
+product-code \
+  --batch-input examples/product_batch_input_with_pg_name.csv \
+  --scraped-root data/scraped \
+  --pg-feature-input examples/pg_feature_coding_input.csv \
+  --input-id ROW_0001 \
+  --input-id ROW_0002
 ```
 
+## Single-artifact debug mode
 
-## v123 notebook LLM fix
+```bash
+product-code \
+  --artifact-dir data/scraped/ROW_0001 \
+  --pg-name "TOY VEHICLES/PLAYSET" \
+  --pg-feature-input examples/pg_feature_coding_input.csv \
+  --output-dir data/coded/ROW_0001_debug \
+  --max-parallel-features 4
+```
 
-The notebook now uses direct `httpx` chat-completions transport by default:
+## Outputs
+
+Batch output root:
+
+```text
+data/coded/batch_run/
+├── combined_coded_features.csv
+├── batch_coding_result.json
+├── failed_products.csv
+├── ROW_0001/
+│   ├── coded_features.csv
+│   ├── coded_features.json
+│   ├── coding_audit.md
+│   └── agent_trace.json
+└── ROW_0002/
+```
+
+The combined CSV includes product context plus coded feature values.
+
+## Environment
+
+The LLM transport defaults to direct HTTP to avoid OpenAI SDK import conflicts:
 
 ```bash
 PCT_LLM_TRANSPORT=httpx
 ```
 
-This avoids the AzureML/VS Code notebook failure:
-
-```text
-ModuleNotFoundError: No module named 'openai.pagination'
-```
-
-That error is caused by a broken or mixed OpenAI SDK install in the active kernel. The product coding agent does not need the SDK for normal runs. It posts directly to the Azure OpenAI / compatible chat-completions endpoint derived from `PCT_LLM_ENDPOINT`, `PCT_LLM_DEPLOYMENT`, and `PCT_LLM_API_VERSION`.
-
-If your gateway already gives a full chat endpoint, set:
+Feature parallelism:
 
 ```bash
-PCT_LLM_CHAT_COMPLETIONS_URL=<full chat completions url>
+PCT_CODING_MAX_PARALLEL_FEATURES=4
 ```
 
-Only use the SDK path if you intentionally install the optional extra:
-
-```bash
-pdm add openai==1.55.3
-# or install .[openai-sdk]
-PCT_LLM_TRANSPORT=openai
-```
-
-
-## Clean reinstall after `openai.pagination` error
-
-If you already created the old v122 environment, recreate it once so the notebook does not keep using the broken package state:
-
-```bash
-rm -rf .venv
-pdm install --prod
-```
-
-Then select the kernel named:
-
-```text
-Product Coding Tool (PDM)
-```
-
-The code path now defaults to direct HTTP and does not import `openai` unless you explicitly set `PCT_LLM_TRANSPORT=openai`.
-
-
-## Dependency policy
-
-- `pyproject.toml` is the only dependency manifest.
-- Runtime, LLM HTTP transport, pandas, and Jupyter kernel dependencies live in `[project.dependencies]`, so `pdm install --prod` is enough for notebook execution.
-- Test/lint tooling lives in optional groups and is installed only when requested.
-- No `requirements.txt`, `requirements-notebook.txt`, or constraints files are maintained to avoid dependency drift.
-
-
-## Feature worker pool semantics
-
-The parallel engine uses a dynamic worker pool, not a fixed static assignment.
-With `--max-parallel-features 4` and 8 requested features:
-
-```text
-queue: F1 F2 F3 F4 F5 F6 F7 F8
-
-worker_1 -> F1 -> next available feature
-worker_2 -> F2 -> next available feature
-worker_3 -> F3 -> next available feature
-worker_4 -> F4 -> next available feature
-```
-
-Each worker completes the full loop for one feature before taking another feature:
-
-```text
-plan evidence -> collect artifact evidence -> code value -> review gate -> retry if needed -> final result
-```
-
-So retries happen inside the assigned feature worker. Other workers continue processing their own features. Final JSON/CSV output is sorted back to the original feature input order.

@@ -1,11 +1,19 @@
 #!/usr/bin/env python
 """Run the artifact-grounded product coding agent.
 
-Example:
+Batch example:
     python scripts/run_product_coding.py \
-      --artifact-dir data/scraped/scrape_20260628_190357_25c16d76 \
-      --features-json examples/features.json \
-      --output-dir data/coded/demo
+      --batch-input examples/product_batch_input_with_pg_name.csv \
+      --scraped-root data/scraped \
+      --pg-feature-input examples/pg_feature_coding_input.csv \
+      --output-dir data/coded/batch_run \
+      --max-parallel-features 4
+
+Single-product debug example:
+    python scripts/run_product_coding.py \
+      --artifact-dir data/scraped/ROW_0001 \
+      --pg-name "TOY VEHICLES/PLAYSET" \
+      --pg-feature-input examples/pg_feature_coding_input.csv
 """
 
 from __future__ import annotations
