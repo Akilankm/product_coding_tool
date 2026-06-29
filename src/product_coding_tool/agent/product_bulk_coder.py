@@ -19,7 +19,6 @@ from ..prompts import P
 from ..rules.validator import RuleValidator
 from ..services.llm import get_llm_service
 from .json_utils import parse_json_object
-from .locator import compact_snippet if False else None
 
 
 class ProductBulkCoder:
@@ -38,7 +37,7 @@ class ProductBulkCoder:
         context: ProductArtifactContext,
     ) -> list[FeatureCodingResult]:
         if not self.cfg.llm_enabled:
-            return [self._fallback_result(artifact_id, f, [], "LLM disabled; product bulk coding skipped.") for f in features]
+            return [self.validator.validate(f, self._fallback_result(artifact_id, f, [], "LLM disabled; product bulk coding skipped.")) for f in features]
 
         evidence_items = self._build_product_evidence(features, context)
         evidence_by_id = {e.evidence_id: e for e in evidence_items}
@@ -104,7 +103,7 @@ class ProductBulkCoder:
             return results
         except Exception as exc:  # noqa: BLE001 - product-level fallback remains available.
             logger.exception("Product bulk coding failed artifact={} features={}", artifact_id, len(features))
-            return [self._fallback_result(artifact_id, f, evidence_items[:3], f"Product bulk coding failed: {exc}") for f in features]
+            return [self.validator.validate(f, self._fallback_result(artifact_id, f, evidence_items[:3], f"Product bulk coding failed: {exc}")) for f in features]
 
     def _results_from_llm_data(
         self,
