@@ -41,6 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", help="Output directory/root.")
     parser.add_argument("--max-iterations", type=int, default=1, help="Maximum evidence/coding loop iterations per feature.")
     parser.add_argument(
+        "--coding-mode",
+        choices=["per_product", "product", "bulk", "auto", "per_feature", "feature"],
+        default=None,
+        help="Batch coding strategy. per_product/bulk is the fast production path; per_feature is the debug path.",
+    )
+    parser.add_argument(
         "--max-parallel-features",
         type=int,
         default=None,
@@ -88,6 +94,7 @@ def main(argv: list[str] | None = None) -> None:
             max_iterations=max(1, args.max_iterations),
             max_parallel_features=args.max_parallel_features,
             max_parallel_products=args.max_parallel_products,
+            coding_mode=args.coding_mode,
             llm_preflight=not args.skip_llm_preflight,
         )
         result = ProductBatchCodingAgent().run(request)
