@@ -12,7 +12,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from .agent.orchestrator import ProductCodingAgent
 from .artifacts.navigator import ArtifactNavigator
@@ -109,7 +108,8 @@ class ProductBatchCodingAgent:
             )
             failed = [*preflight_failures, *runtime_failures]
 
-        products.sort(key=lambda p: str((p.product_context or {}).get("input_id") or p.product_id))
+        products.sort(key=lambda p: int((p.product_context or {}).get("batch_row_order") or 0))
+        failed.sort(key=lambda f: int((f.product_context or {}).get("batch_row_order") or 0))
         artifact_quality_reports = [p.artifact_quality_report for p in products if p.artifact_quality_report]
         result = ProductBatchCodingResult(
             products=products,
@@ -224,7 +224,10 @@ class ProductBatchCodingAgent:
             product_context["PG_name"] = record.resolved_pg_name
             product_context["artifact_missing_expected_files"] = "; ".join(record.missing_expected_files)
             product_context["artifact_file_count"] = record.artifact_file_count
-            agent = self.product_agent if self._resolve_max_parallel_products(request, 1) <= 1 else ProductCodingAgent()
+            product_context["batch_row_order"] = row.row_order
+            # Use a fresh product agent for each product. This keeps product-level parallelism
+            # isolated while the shared LLM singleton still enforces global concurrency.
+            agent = ProductCodingAgent()
             product_result = agent.run(
                 CodingRequest(
                     artifact_dir=record.artifact_dir,
@@ -266,13 +269,15 @@ class ProductBatchCodingAgent:
 
 
 def _failed(row: ProductInputRow, artifact_dir: Path, exc: Exception) -> FailedProductCodingResult:
+    context = dict(row.fields or {})
+    context["batch_row_order"] = row.row_order
     return FailedProductCodingResult(
         input_id=row.input_id,
         pg_name=row.pg_name,
         artifact_dir=artifact_dir,
         error=str(exc),
         error_type=type(exc).__name__,
-        product_context=row.fields,
+        product_context=context,
     )
 
 
