@@ -45,10 +45,27 @@ class AuditRenderer:
             lines.append("### Missing evidence")
             lines.extend(f"- {x}" for x in result.missing_evidence)
             lines.append("")
+        trace = result.audit.get("iteration_trace") or []
+        if trace:
+            lines.append("### Iteration trace")
+            lines.append("")
+            for item in trace:
+                lines.append(
+                    f"- iteration={item.get('iteration')} retry={item.get('retry')} "
+                    f"reason={item.get('retry_reason')} confidence={item.get('confidence')} "
+                    f"validation={item.get('validation_status')} evidence_items={item.get('evidence_items')}"
+                )
+            lines.append("")
         files = result.audit.get("files_checked") or []
         if files:
             lines.append("### Files checked")
             lines.extend(f"- `{x}`" for x in files)
+            lines.append("")
+        quality_warning_count = result.audit.get("artifact_quality_warning_count")
+        if quality_warning_count:
+            lines.append("### Artifact quality")
+            lines.append(f"- Warning count: {quality_warning_count}")
+            lines.append("- See `artifact_quality_report.json` for file-level details.")
             lines.append("")
         return lines
 

@@ -73,6 +73,8 @@ class ProductCodingAgent:
         product_id = request.product_id or str(request.product_context.get("input_id") or inventory.artifact_id)
         self._apply_request_metadata(results, request=request, product_id=product_id)
 
+        artifact_quality_report = reader.quality_report().to_dict()
+        self._attach_artifact_quality(results, artifact_quality_report)
         out = BatchCodingResult(
             artifact_id=inventory.artifact_id,
             artifact_dir=navigator.artifact_root,
@@ -80,6 +82,7 @@ class ProductCodingAgent:
             output_dir=request.output_dir,
             product_id=product_id,
             product_context=request.product_context,
+            artifact_quality_report=artifact_quality_report,
         )
         writer = ResultWriter()
         writer.write(out, output_dir=request.output_dir)
@@ -128,15 +131,51 @@ class ProductCodingAgent:
         logger.info("Coding feature: {} ({}) worker_thread={}", feature.feature_name, feature.feature_id, worker_thread)
         plan = self.planner.plan(feature, inventory)
         iteration = 1
+        iteration_trace: list[dict[str, Any]] = []
         while True:
             packet = retriever.retrieve(feature, inventory, plan)
             result = self.coder.code(feature, packet, iteration=iteration)
+            should_retry, retry_reason = self.review_gate.evaluate(
+                feature,
+                packet,
+                result,
+                iteration=iteration,
+                max_iterations=max_iterations,
+            )
+            iteration_record = {
+                "iteration": iteration,
+                "retry": should_retry,
+                "retry_reason": retry_reason,
+                "confidence": result.confidence,
+                "manual_review": result.manual_review,
+                "validation_status": result.validation_status,
+                "identity_status": result.identity_status,
+                "evidence_items": len(packet.evidence),
+                "evidence_chars": sum(len(e.text or "") for e in packet.evidence),
+                "files_checked": list(packet.files_checked),
+                "missing_files": list(packet.missing_files),
+                "conflicts": list(result.conflicts),
+                "missing_evidence": list(result.missing_evidence),
+            }
+            iteration_trace.append(iteration_record)
+            logger.info(
+                "Feature iteration feature={} iteration={} retry={} reason={} confidence={} validation={} evidence_items={}",
+                feature.feature_name,
+                iteration,
+                should_retry,
+                retry_reason,
+                f"{result.confidence:.3f}",
+                result.validation_status,
+                len(packet.evidence),
+            )
             result.audit["iterations"] = iteration
+            result.audit["iteration_trace"] = list(iteration_trace)
+            result.audit["final_retry_reason"] = retry_reason
             result.audit["parallel_safe"] = True
             result.audit["worker_thread"] = worker_thread
             result.audit["worker_pool"] = "feature_worker_pool"
             result.audit.update(_feature_audit_metadata(feature))
-            if not self.review_gate.should_collect_more(feature, packet, result, iteration=iteration, max_iterations=max_iterations):
+            if not should_retry:
                 return result
             iteration += 1
             plan = plan.model_copy(
@@ -144,10 +183,18 @@ class ProductCodingAgent:
                     "evidence_queries": self.review_gate.strengthen_plan_queries(feature, result),
                     "files_to_read": _dedupe([*plan.files_to_read, "retailer/source.md", "retailer/tables/*.md", "retailer/vision.md"]),
                     "needs_vision": plan.needs_vision or feature.requires_visual,
-                    "reason": f"Follow-up evidence collection after review gate: {result.missing_evidence or result.conflicts}",
+                    "reason": f"Follow-up evidence collection after review gate: {retry_reason}; details={result.missing_evidence or result.conflicts}",
                 }
             )
 
+
+    @staticmethod
+    def _attach_artifact_quality(results: list[FeatureCodingResult], artifact_quality_report: dict[str, Any]) -> None:
+        if not artifact_quality_report:
+            return
+        for result in results:
+            result.audit.setdefault("artifact_quality_report", artifact_quality_report)
+            result.audit.setdefault("artifact_quality_warning_count", artifact_quality_report.get("warning_count", 0))
 
     @staticmethod
     def _apply_request_metadata(

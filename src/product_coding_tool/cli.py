@@ -39,7 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--feature-name", action="append", help="Optional feature filter in single-product mode. Can repeat.")
     parser.add_argument("--limit-features", type=int, help="Optional limit after PG filtering; useful for smoke tests.")
     parser.add_argument("--output-dir", help="Output directory/root.")
-    parser.add_argument("--max-iterations", type=int, default=3, help="Maximum evidence/coding loop iterations per feature.")
+    parser.add_argument("--max-iterations", type=int, default=2, help="Maximum evidence/coding loop iterations per feature.")
     parser.add_argument(
         "--max-parallel-features",
         type=int,

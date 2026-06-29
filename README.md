@@ -116,8 +116,12 @@ Inside each product, feature coding is parallelized:
 Each feature worker performs its own sequential agent loop:
 
 ```text
-plan evidence -> collect artifact evidence -> code value -> review gate -> retry if needed
+plan evidence -> collect artifact evidence -> code value -> review gate -> retry only when productive
 ```
+
+The review gate now logs a per-feature `iteration_trace` with the retry decision and reason.
+Closed-set values that are outside the supplied allowed list are marked for manual review instead
+of repeatedly calling the LLM with the same evidence.
 
 ## Install
 
@@ -181,16 +185,51 @@ Batch output root:
 data/coded/batch_run/
 ├── combined_coded_features.csv
 ├── batch_coding_result.json
+├── batch_artifact_quality_report.json
 ├── failed_products.csv
 ├── ROW_0001/
 │   ├── coded_features.csv
 │   ├── coded_features.json
 │   ├── coding_audit.md
+│   ├── artifact_quality_report.json
 │   └── agent_trace.json
 └── ROW_0002/
 ```
 
-The combined CSV includes product context plus coded feature values.
+The combined CSV includes product context plus coded feature values. It also includes
+`iterations`, `final_retry_reason`, and `artifact_quality_warning_count` so batch output can
+be audited without opening every per-product folder.
+
+## Artifact quality handling
+
+The reader is defensive because upstream scrape artifacts can contain files named `.json`
+that are not valid JSON. The tool now:
+
+```text
+read file once per product artifact
+try strict JSON
+try safe lenient JSON recovery
+fallback to text if malformed
+record the issue in artifact_quality_report.json
+log the malformed file only once
+```
+
+This means malformed JSON no longer floods logs or causes repeated parsing work. The coding
+run still completes, while the artifact defect is visible in `artifact_quality_report.json` and
+`batch_artifact_quality_report.json`.
+
+## Evidence-token control
+
+Full scrape files are no longer sent wholesale for every feature. Evidence is compacted into
+feature-specific snippets before LLM coding. Default caps are now:
+
+```bash
+PCT_CODING_MAX_ITERATIONS=2
+PCT_CODING_MAX_EVIDENCE_ITEMS=12
+PCT_CODING_MAX_EVIDENCE_CHARS=18000
+PCT_CODING_EVIDENCE_CONTEXT_CHARS=900
+PCT_CODING_READ_FILE_CHARS=6000
+```
 
 ## Environment
 
@@ -204,5 +243,13 @@ Feature parallelism:
 
 ```bash
 PCT_CODING_MAX_PARALLEL_FEATURES=4
+```
+
+Evidence/retry defaults are deliberately conservative to reduce repeated large LLM calls:
+
+```bash
+PCT_CODING_MAX_ITERATIONS=2
+PCT_CODING_MAX_EVIDENCE_ITEMS=12
+PCT_CODING_MAX_EVIDENCE_CHARS=18000
 ```
 

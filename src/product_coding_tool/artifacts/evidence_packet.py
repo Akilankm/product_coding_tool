@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import fnmatch
-import json
-from pathlib import Path
 from typing import Iterable
 
 from ..config import get_config
 from ..log import logger
 from ..models import ArtifactInventory, EvidenceItem, EvidencePacket, EvidencePlan, FeatureRule
+from .locator import ArtifactEvidenceLocator, compact_snippet
 from .navigator import ArtifactNavigator
 from .reader import ArtifactReader
-from .locator import ArtifactEvidenceLocator
 
 
 class EvidencePacketBuilder:
@@ -36,8 +34,9 @@ class EvidencePacketBuilder:
                 continue
             files_checked.append(rel)
             try:
-                text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
-            except Exception as exc:
+                raw_text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
+                text = self._compact_file_text(rel, raw_text, feature, plan)
+            except Exception as exc:  # noqa: BLE001 - keep product/feature isolation.
                 missing_files.append(f"{rel} ({exc})")
                 continue
             if not text.strip():
@@ -50,6 +49,7 @@ class EvidencePacketBuilder:
                     text=text,
                     score=100.0 / max(1, len(files_checked)),
                     strength="strong" if self._strong_source(rel) else "medium",
+                    metadata={"compacted": len(text) < len(raw_text), "raw_chars": len(raw_text), "sent_chars": len(text)},
                 )
             )
             evidence_id += 1
@@ -73,7 +73,8 @@ class EvidencePacketBuilder:
             for rel in ["retailer/vision.md", "retailer/manifests/image_manifest.json"]:
                 if self.reader.exists(rel) and rel not in files_checked:
                     try:
-                        text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
+                        raw_text = self.reader.read_any_as_text(rel, max_chars=self.cfg.coding_read_file_chars)
+                        text = self._compact_file_text(rel, raw_text, feature, plan)
                         evidence.append(
                             EvidenceItem(
                                 evidence_id=f"E{len(evidence)+1:03d}",
@@ -82,10 +83,11 @@ class EvidencePacketBuilder:
                                 text=text,
                                 score=25.0,
                                 strength="medium",
+                                metadata={"compacted": len(text) < len(raw_text), "raw_chars": len(raw_text), "sent_chars": len(text)},
                             )
                         )
                         files_checked.append(rel)
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001
                         missing_files.append(f"{rel} ({exc})")
 
         evidence = self._trim_evidence(evidence)
@@ -97,11 +99,14 @@ class EvidencePacketBuilder:
         else:
             missing = []
 
+        total_chars = sum(len(e.text or "") for e in evidence)
         logger.info(
-            "Evidence packet feature={} evidence_items={} files_checked={}",
+            "Evidence packet feature={} evidence_items={} files_checked={} evidence_chars={} artifact_warnings={}",
             feature.feature_name,
             len(evidence),
             len(files_checked),
+            total_chars,
+            self.reader.quality_report().warning_count,
         )
         return EvidencePacket(
             artifact_id=self.navigator.artifact_id,
@@ -148,6 +153,40 @@ class EvidencePacketBuilder:
                 seen.add(rel)
         return deduped
 
+    def _compact_file_text(self, rel: str, text: str, feature: FeatureRule, plan: EvidencePlan) -> str:
+        """Send feature-relevant snippets instead of whole artifact files.
+
+        Full source/metadata files are useful for retrieval, but sending them
+        wholesale to every feature causes 25k-30k-token prompts. This keeps a
+        small header plus matched snippets around feature/allowed-value terms.
+        """
+        if not text:
+            return ""
+        hard_cap = max(900, min(self.cfg.coding_read_file_chars, self.cfg.coding_evidence_context_chars * 3))
+        if len(text) <= hard_cap:
+            return text
+        terms = _evidence_terms(feature, plan)
+        snippets: list[str] = []
+        header = text[: min(500, hard_cap // 3)].strip()
+        if header:
+            snippets.append(f"[file_start]\n{header}")
+        lowered = text.lower()
+        for term in terms:
+            if not term or term.lower() not in lowered:
+                continue
+            snippet = compact_snippet(text, [term], context_chars=self.cfg.coding_evidence_context_chars)
+            if snippet and all(snippet[:160] not in existing for existing in snippets):
+                snippets.append(f"[matched_term={term}]\n{snippet}")
+            if sum(len(s) for s in snippets) >= hard_cap:
+                break
+        if len(snippets) == 1:
+            # No term hit. Preserve leading content only.
+            return text[:hard_cap].strip() + "\n...[truncated: no feature-specific term hit]"
+        compacted = "\n\n".join(snippets)
+        if len(compacted) > hard_cap:
+            compacted = compacted[:hard_cap] + "\n...[truncated: compact evidence cap]"
+        return compacted
+
     def _trim_evidence(self, evidence: list[EvidenceItem]) -> list[EvidenceItem]:
         evidence.sort(key=lambda e: (-e.score, e.source_file, e.evidence_id))
         max_items = self.cfg.coding_max_evidence_items
@@ -169,21 +208,40 @@ class EvidencePacketBuilder:
 
     @staticmethod
     def _strong_source(rel: str) -> bool:
-        return rel in {"retailer/source.md", "retailer/metadata.json"} or rel.startswith("retailer/tables/")
+        return any(
+            rel.endswith(x)
+            for x in [
+                "source.md",
+                "product_evidence.json",
+                "product_evidence.md",
+                "claims.md",
+            ]
+        ) or "/tables/" in rel
 
     @staticmethod
     def _evidence_type_for(rel: str) -> str:
-        if rel.startswith("retailer/tables/"):
+        if "/tables/" in rel:
             return "table"
         if rel.endswith(".json"):
             return "json"
         if rel.endswith("vision.md"):
             return "vision"
-        if rel.endswith("claims.md"):
-            return "claims"
-        if rel.endswith("source.md"):
-            return "source_text"
         return "text"
+
+
+def _evidence_terms(feature: FeatureRule, plan: EvidencePlan) -> list[str]:
+    terms = [feature.feature_name, *feature.evidence_terms, *(plan.evidence_queries or [])]
+    terms.extend(feature.allowed_values or [])
+    # Keep only useful non-trivial terms, longest first for better snippets.
+    seen: set[str] = set()
+    out: list[str] = []
+    for term in sorted(terms, key=lambda x: len(str(x or "")), reverse=True):
+        cleaned = " ".join(str(term or "").strip().split())
+        key = cleaned.lower()
+        if len(key) >= 2 and key not in seen:
+            out.append(cleaned)
+            seen.add(key)
+    return out[:40]
 
 
 __all__ = ["EvidencePacketBuilder"]

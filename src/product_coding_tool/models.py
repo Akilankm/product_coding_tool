@@ -93,7 +93,7 @@ class CodingRequest(BaseModel):
     output_dir: Path | None = None
     product_id: str = ""
     product_context: dict[str, Any] = Field(default_factory=dict)
-    max_iterations: int = 3
+    max_iterations: int = 2
     max_parallel_features: int | None = None
 
     @model_validator(mode="after")
@@ -216,6 +216,7 @@ class BatchCodingResult(BaseModel):
     output_dir: Path | None = None
     product_id: str = ""
     product_context: dict[str, Any] = Field(default_factory=dict)
+    artifact_quality_report: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProductInputRow(BaseModel):
@@ -241,7 +242,7 @@ class ProductBatchCodingRequest(BaseModel):
     input_ids: list[str] | None = None
     limit_products: int | None = None
     limit_features: int | None = None
-    max_iterations: int = 3
+    max_iterations: int = 2
     max_parallel_features: int | None = None
     llm_preflight: bool | None = None
 
@@ -279,6 +280,7 @@ class ProductBatchCodingResult(BaseModel):
     products: list[BatchCodingResult] = Field(default_factory=list)
     failed_products: list[FailedProductCodingResult] = Field(default_factory=list)
     output_dir: Path | None = None
+    artifact_quality_reports: list[dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [

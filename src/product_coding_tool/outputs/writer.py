@@ -35,6 +35,11 @@ class ResultWriter:
             encoding="utf-8",
         )
         self._write_csv(batch, out / "coded_features.csv")
+        if batch.artifact_quality_report:
+            (out / "artifact_quality_report.json").write_text(
+                json.dumps(batch.artifact_quality_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         (out / "coding_audit.md").write_text(self.audit.render(batch), encoding="utf-8")
         self._write_trace(batch, out / "agent_trace.json")
         logger.info("Wrote product coding outputs to {}", out)
@@ -54,6 +59,7 @@ class ResultWriter:
             "artifact_dir": str(batch.artifact_dir),
             "product_id": batch.product_id,
             "product_context": batch.product_context,
+            "artifact_quality_report": batch.artifact_quality_report,
             "results": [
                 {
                     "feature_id": r.feature_id,
@@ -82,6 +88,7 @@ class ProductBatchResultWriter:
         )
         self._write_combined_csv(result, out / "combined_coded_features.csv")
         self._write_failed_csv(result, out / "failed_products.csv")
+        self._write_batch_quality_report(result, out / "batch_artifact_quality_report.json")
         logger.info(
             "Wrote batch product coding outputs to {} products={} failed={}",
             out,
@@ -103,6 +110,16 @@ class ProductBatchResultWriter:
                     row = dict(product.product_context or {})
                     row.update(_result_to_row(product, feature_result))
                     writer.writerow({field: row.get(field, "") for field in fields})
+
+    def _write_batch_quality_report(self, result: ProductBatchCodingResult, path: Path) -> None:
+        payload = {
+            "products": len(result.products),
+            "failed_products": len(result.failed_products),
+            "artifact_warning_products": sum(1 for r in result.artifact_quality_reports if r.get("has_warnings")),
+            "total_artifact_warnings": sum(int(r.get("warning_count") or 0) for r in result.artifact_quality_reports),
+            "artifact_quality_reports": result.artifact_quality_reports,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _write_failed_csv(self, result: ProductBatchCodingResult, path: Path) -> None:
         input_fields = _collect_failed_input_fields(result)
@@ -150,6 +167,9 @@ def _coded_feature_fields() -> list[str]:
         "justification",
         "conflicts",
         "missing_evidence",
+        "iterations",
+        "final_retry_reason",
+        "artifact_quality_warning_count",
     ]
 
 
@@ -182,6 +202,9 @@ def _result_to_row(batch: BatchCodingResult, result: Any) -> dict[str, Any]:
         "justification": result.justification,
         "conflicts": " | ".join(result.conflicts),
         "missing_evidence": " | ".join(result.missing_evidence),
+        "iterations": audit.get("iterations", ""),
+        "final_retry_reason": audit.get("final_retry_reason", ""),
+        "artifact_quality_warning_count": audit.get("artifact_quality_warning_count", ""),
     }
 
 

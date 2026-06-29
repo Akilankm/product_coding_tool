@@ -62,11 +62,11 @@ class Config:
     output_root: Path = field(default_factory=lambda: Path(_env("CODING_OUTPUT_ROOT", str(_ROOT / "data" / "coded"))))
 
     # Agent loop controls.
-    coding_max_iterations: int = field(default_factory=lambda: _env_int("CODING_MAX_ITERATIONS", 3))
-    coding_max_evidence_items: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_ITEMS", 24))
-    coding_max_evidence_chars: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_CHARS", 45_000))
-    coding_evidence_context_chars: int = field(default_factory=lambda: _env_int("CODING_EVIDENCE_CONTEXT_CHARS", 1_600))
-    coding_read_file_chars: int = field(default_factory=lambda: _env_int("CODING_READ_FILE_CHARS", 12_000))
+    coding_max_iterations: int = field(default_factory=lambda: _env_int("CODING_MAX_ITERATIONS", 2))
+    coding_max_evidence_items: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_ITEMS", 12))
+    coding_max_evidence_chars: int = field(default_factory=lambda: _env_int("CODING_MAX_EVIDENCE_CHARS", 18_000))
+    coding_evidence_context_chars: int = field(default_factory=lambda: _env_int("CODING_EVIDENCE_CONTEXT_CHARS", 900))
+    coding_read_file_chars: int = field(default_factory=lambda: _env_int("CODING_READ_FILE_CHARS", 6_000))
     coding_min_confidence: float = field(default_factory=lambda: _env_float("CODING_MIN_CONFIDENCE", 0.72))
     coding_max_parallel_features: int = field(default_factory=lambda: _env_int("CODING_MAX_PARALLEL_FEATURES", 4))
 

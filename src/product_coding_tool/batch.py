@@ -107,7 +107,13 @@ class ProductBatchCodingAgent:
                 logger.exception("Product-level coding failed input_id={} pg_name={}", row.input_id, row.pg_name)
                 failed.append(_failed(row, artifact_dir, exc))
 
-        result = ProductBatchCodingResult(products=products, failed_products=failed, output_dir=output_root)
+        artifact_quality_reports = [p.artifact_quality_report for p in products if p.artifact_quality_report]
+        result = ProductBatchCodingResult(
+            products=products,
+            failed_products=failed,
+            output_dir=output_root,
+            artifact_quality_reports=artifact_quality_reports,
+        )
         ProductBatchResultWriter().write(result, output_dir=output_root)
         logger.info(
             "ProductBatchCodingAgent complete products={} failed={} output_dir={}",
